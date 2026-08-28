@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../lib/supabaseClient';
 import { useUI } from '../lib/UIContext';
-import { gradoCorto } from '../utils/turnos';
+import { gradoCorto, gradoNumero } from '../utils/turnos';
 import Icon from './Icon';
 import Cargador from './Cargador';
 
@@ -72,11 +72,19 @@ export default function CarnetsQR() {
   const gradoSeccionOpciones = useMemo(() => {
     const set = new Map();
     for (const e of estudiantes) {
+      if (turno !== 'todos' && e.turno !== turno) continue;
       const key = `${e.grado}|${e.seccion}`;
-      set.set(key, `${gradoCorto(e.grado)} "${e.seccion}"`);
+      set.set(key, {
+        label: `${gradoCorto(e.grado)} "${e.seccion}"`,
+        grado: Number(gradoNumero(e.grado)) || 0,
+        seccion: String(e.seccion || '').trim().toUpperCase(),
+      });
     }
-    return Array.from(set.entries());
-  }, [estudiantes]);
+    return Array.from(set.entries()).sort(([, a], [, b]) => {
+      if (a.grado !== b.grado) return a.grado - b.grado;
+      return a.seccion.localeCompare(b.seccion, 'es');
+    });
+  }, [estudiantes, turno]);
 
   const filtrados = useMemo(() => {
     return estudiantes.filter((e) => {
@@ -337,7 +345,10 @@ export default function CarnetsQR() {
               <label className="block font-label-md text-label-md text-on-surface-variant mb-1">Turno</label>
               <select
                 value={turno}
-                onChange={(e) => setTurno(e.target.value)}
+                onChange={(e) => {
+                  setTurno(e.target.value);
+                  setGradoSeccion('all');
+                }}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-on-surface focus:outline-none focus:border-secondary transition-all text-body-md"
               >
                 <option value="todos">Todos los Turnos</option>
@@ -355,7 +366,7 @@ export default function CarnetsQR() {
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-on-surface focus:outline-none focus:border-secondary transition-all text-body-md"
               >
                 <option value="all">Todas las Secciones</option>
-                {gradoSeccionOpciones.map(([key, label]) => (
+                {gradoSeccionOpciones.map(([key, { label }]) => (
                   <option key={key} value={key}>
                     {label}
                   </option>
