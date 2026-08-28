@@ -10,3 +10,7 @@ supabase/.branches
 # Mockups / prototipos de UI (no forman parte del build)
 UI/
 ui.html
+
+# Documentos internos (no se publican en el repositorio)
+INFORME_SISTEMA.md
+SEGURIDAD.md
