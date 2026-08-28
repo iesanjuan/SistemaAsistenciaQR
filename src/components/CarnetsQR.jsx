@@ -87,16 +87,28 @@ export default function CarnetsQR() {
   }, [estudiantes, turno]);
 
   const filtrados = useMemo(() => {
-    return estudiantes.filter((e) => {
-      if (turno !== 'todos' && e.turno !== turno) return false;
-      if (gradoSeccion !== 'all' && `${e.grado}|${e.seccion}` !== gradoSeccion) return false;
-      if (busqueda) {
-        const q = busqueda.toLowerCase();
-        const nombreCompleto = `${e.apellidos} ${e.nombres}`.toLowerCase();
-        if (!nombreCompleto.includes(q) && !e.dni.includes(q)) return false;
-      }
-      return true;
-    });
+    return estudiantes
+      .filter((e) => {
+        if (turno !== 'todos' && e.turno !== turno) return false;
+        if (gradoSeccion !== 'all' && `${e.grado}|${e.seccion}` !== gradoSeccion) return false;
+        if (busqueda) {
+          const q = busqueda.toLowerCase();
+          const nombreCompleto = `${e.apellidos} ${e.nombres}`.toLowerCase();
+          if (!nombreCompleto.includes(q) && !e.dni.includes(q)) return false;
+        }
+        return true;
+      })
+      // Orden: por grado (1ro→5to), luego por sección, y dentro de cada
+      // sección alfabético por apellidos y nombres.
+      .sort((a, b) => {
+        const ga = Number(gradoNumero(a.grado)) || 0;
+        const gb = Number(gradoNumero(b.grado)) || 0;
+        if (ga !== gb) return ga - gb;
+        const sa = String(a.seccion || '').trim().toUpperCase();
+        const sb = String(b.seccion || '').trim().toUpperCase();
+        if (sa !== sb) return sa.localeCompare(sb, 'es');
+        return `${a.apellidos} ${a.nombres}`.localeCompare(`${b.apellidos} ${b.nombres}`, 'es');
+      });
   }, [estudiantes, turno, gradoSeccion, busqueda]);
 
   // Genera un documento aislado SOLO con los carnets filtrados y lo manda a
@@ -141,34 +153,37 @@ export default function CarnetsQR() {
 <meta charset="utf-8" />
 <title>Carnets QR</title>
 <style>
-  @page { size: A4; margin: 10mm; }
+  @page { size: A4; margin: 8mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; margin: 0; color: #1a1a1a; }
+  /* 4 columnas por hoja. Cada carnet tiene ALTO FIJO (32mm) para que no se
+     estire: así entran 8 filas (4 x 8 = 32 carnets por página A4). */
   .grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8mm;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 3mm;
   }
   .carnet {
     border: 1px solid #cbd5e1;
-    border-radius: 10px;
+    border-radius: 6px;
     overflow: hidden;
     page-break-inside: avoid;
     break-inside: avoid;
     display: flex;
     flex-direction: column;
     background: #fff;
+    height: 32mm;
   }
-  .franja { height: 8px; width: 100%; }
+  .franja { height: 4px; width: 100%; flex: none; }
   .franja.manana { background: #f59e0b; }
   .franja.tarde { background: #6366f1; }
-  .cuerpo { padding: 10px; display: flex; flex-direction: column; align-items: center; text-align: center; }
-  .qr { width: 34mm; height: 34mm; padding: 4px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; display: flex; align-items: center; justify-content: center; }
+  .cuerpo { padding: 4px 3px; display: flex; flex-direction: column; align-items: center; text-align: center; flex: 1; min-height: 0; overflow: hidden; }
+  .qr { width: 17mm; height: 17mm; padding: 2px; border: 1px solid #e2e8f0; border-radius: 4px; background: #fff; display: flex; align-items: center; justify-content: center; flex: none; }
   .qr svg { width: 100%; height: 100%; }
-  .nombre { margin-top: 8px; font-size: 12px; font-weight: 700; line-height: 1.2; }
-  .meta { margin-top: 2px; font-size: 11px; color: #475569; }
-  .id { margin-top: 2px; font-size: 10px; color: #64748b; }
-  .badge { margin-top: 6px; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; padding: 2px 8px; border-radius: 999px; }
+  .nombre { margin-top: 3px; font-size: 8px; font-weight: 700; line-height: 1.1; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .meta { margin-top: 1px; font-size: 7px; color: #475569; }
+  .id { margin-top: 1px; font-size: 6.5px; color: #64748b; }
+  .badge { margin-top: 2px; font-size: 6px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; padding: 1px 5px; border-radius: 999px; }
   .badge.manana { background: #fef3c7; color: #92400e; }
   .badge.tarde { background: #e0e7ff; color: #3730a3; }
 </style>
