@@ -31,8 +31,8 @@ export default function Login() {
         onSubmit={manejarSubmit}
         className="bg-surface-container-lowest rounded-xl shadow-md border border-outline-variant p-8 w-full max-w-sm"
       >
-        <div className="flex items-center gap-3 mb-6">
-          <img src="/logo.png" alt="Escudo Colegio San Juan" className="w-12 h-12 object-contain shrink-0" />
+        <div className="flex flex-col items-center text-center gap-2 mb-6">
+          <img src="/logo.png" alt="Escudo Colegio San Juan" className="w-16 h-16 object-contain shrink-0" />
           <div>
             <h1 className="font-headline-md text-headline-md font-black text-primary leading-tight">
               Asistencia San Juan
