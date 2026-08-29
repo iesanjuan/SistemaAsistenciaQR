@@ -35,6 +35,24 @@ const LOG_ESTILOS = {
   TURNO_INCORRECTO: { barra: 'bg-amber-500', chip: 'text-amber-700 bg-amber-50', label: 'TURNO INCORRECTO' },
 };
 
+// Separa la hora del meridiano (a. m. / p. m.) para poder mostrar el meridiano
+// más pequeño y elevado, como un superíndice, en el reloj.
+function relojPartes(date) {
+  const partes = new Intl.DateTimeFormat('es-PE', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }).formatToParts(date);
+  let hora = '';
+  let meridiano = '';
+  for (const p of partes) {
+    if (p.type === 'dayPeriod') meridiano = p.value;
+    else hora += p.value;
+  }
+  return { hora: hora.trim(), meridiano };
+}
+
 function Overlay({ resultado, onCerrar }) {
   if (!resultado) return null;
   const estilo = OVERLAY_ESTILOS[resultado.tipo];
@@ -250,32 +268,65 @@ export default function EscanerQR() {
 
   return (
     <div className="flex-1 md:ml-0 bg-background flex flex-col h-[calc(100dvh-64px-72px)] md:h-screen relative">
-      {/* Control Header */}
-      <div className="bg-surface shadow-sm px-margin-mobile md:px-margin-desktop py-4 flex flex-col md:flex-row justify-between items-center gap-4 z-10 no-print">
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
-          <select
-            value={turno}
-            onChange={(e) => setTurno(e.target.value)}
-            disabled={escaneando || (!esAdmin && !!perfil?.turno)}
-            className="block flex-1 min-w-[150px] md:flex-none md:w-auto pl-3 pr-10 py-2 text-title-md font-title-md border-outline-variant sm:text-sm rounded-md bg-surface-container-lowest text-on-surface border disabled:opacity-60"
-          >
-            <option value={TURNOS.MANANA}>Turno Mañana</option>
-            <option value={TURNOS.TARDE}>Turno Tarde</option>
-          </select>
-          <div className="bg-amber-100 text-amber-800 px-3 py-1 rounded-full font-label-md text-label-md flex items-center gap-1 border border-amber-200 whitespace-nowrap shrink-0">
-            <Icon name="timer" className="text-[16px]" />
-            Tolerancia: {horario.tolerancia}
+      {/* Control Header — tres columnas iguales (turno · reloj · tolerancia) para
+          que el reloj quede centrado de verdad y los extremos queden simétricos. */}
+      <div className="bg-surface shadow-sm border-b border-outline-variant px-margin-mobile md:px-margin-desktop py-4 grid grid-cols-1 md:grid-cols-3 items-center gap-4 z-10 no-print">
+        {/* Turno (izquierda) */}
+        <div className="flex flex-col gap-1 w-full md:w-auto md:justify-self-start">
+          <label htmlFor="selector-turno" className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
+            Turno
+          </label>
+          <div className="relative w-full md:w-56">
+            <Icon
+              name={turno === TURNOS.MANANA ? 'wb_sunny' : 'wb_twilight'}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-primary text-[20px]"
+            />
+            <select
+              id="selector-turno"
+              value={turno}
+              onChange={(e) => setTurno(e.target.value)}
+              disabled={escaneando || (!esAdmin && !!perfil?.turno)}
+              className="appearance-none w-full pl-10 pr-9 py-2.5 font-title-md text-title-md rounded-xl bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              <option value={TURNOS.MANANA}>Turno Mañana</option>
+              <option value={TURNOS.TARDE}>Turno Tarde</option>
+            </select>
+            <Icon
+              name="expand_more"
+              className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]"
+            />
           </div>
         </div>
-        <div className="text-center w-full md:w-auto flex flex-col items-center">
-          <div className="font-display-lg text-3xl md:text-display-lg text-primary tracking-tight tabular-nums">
-            {reloj.toLocaleTimeString('es-PE', { hour12: true })}
+
+        {/* Reloj y fecha (centro) */}
+        <div className="flex flex-col items-center md:justify-self-center">
+          <div className="font-display-lg text-4xl md:text-display-lg text-primary tracking-tight tabular-nums leading-none">
+            {relojPartes(reloj).hora}
+            <sup className="text-[0.4em] font-bold align-super ml-1 uppercase tracking-wide">
+              {relojPartes(reloj).meridiano}
+            </sup>
           </div>
-          <div className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
+          <div className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider mt-1.5 text-center">
             {reloj.toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </div>
         </div>
-        <div className="hidden md:block w-24" />
+
+        {/* Tolerancia (derecha) */}
+        <div className="w-full md:w-auto md:justify-self-end">
+          <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5">
+            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-amber-100 text-amber-700 shrink-0">
+              <Icon name="timer" className="text-[20px]" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-amber-700 font-label-md text-label-md uppercase tracking-wider leading-none">
+                Tolerancia hasta
+              </p>
+              <p className="text-amber-900 font-title-md text-title-md leading-tight tabular-nums">
+                {formatearHoraDesdeTexto(horario.tolerancia)}
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Layout Split */}

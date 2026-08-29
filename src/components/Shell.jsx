@@ -10,6 +10,7 @@ const ITEMS = [
   { to: '/escaner', label: 'Escáner de Asistencia', labelCorto: 'Escáner', icon: 'qr_code_scanner', soloAdmin: false },
   { to: '/reportes', label: 'Reportes', labelCorto: 'Reportes', icon: 'analytics', soloAdmin: true },
   { to: '/usuarios', label: 'Gestión de Usuarios', labelCorto: 'Usuarios', icon: 'manage_accounts', soloAdmin: true },
+  { to: '/perfil', label: 'Mi Perfil', labelCorto: 'Perfil', icon: 'account_circle', soloAdmin: false },
 ];
 
 function seccionesTexto(perfil) {
@@ -57,7 +58,7 @@ export default function Shell({ children }) {
             <Logo />
             <div>
               <h1 className="font-headline-md text-headline-md font-black text-primary leading-tight">
-                Asistencia Sanjuanino
+                Asistencia QR San Juan
               </h1>
             </div>
           </div>

@@ -6,6 +6,7 @@ import CarnetsQR from './components/CarnetsQR';
 import EscanerQR from './components/EscanerQR';
 import ReportesAuxiliar from './components/ReportesAuxiliar';
 import GestionUsuarios from './components/GestionUsuarios';
+import Perfil from './components/Perfil';
 import Shell from './components/Shell';
 import Cargador from './components/Cargador';
 
@@ -46,6 +47,7 @@ export default function App() {
       <Route path="/login" element={session ? <Navigate to="/escaner" replace /> : <Login />} />
       <Route element={<ShellLayout />}>
         <Route path="/escaner" element={<EscanerQR />} />
+        <Route path="/perfil" element={<Perfil />} />
         <Route
           path="/reportes"
           element={

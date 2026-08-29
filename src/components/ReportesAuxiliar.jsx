@@ -144,6 +144,18 @@ export default function ReportesAuxiliar() {
     return total === 0 ? 0 : Math.round(((consolidado.asistio + consolidado.tarde) / total) * 100);
   }, [consolidado]);
 
+  // Desglose legible de la tarjeta de asistencia:
+  //  - presentes  = veces que un alumno marcó (asistió + tarde cuentan como presente)
+  //  - posibles   = oportunidades totales de marcar (alumnos × días de clase del rango)
+  //  - alumnos/días son los dos factores que explican de dónde sale "posibles".
+  const resumenAsistencia = useMemo(() => {
+    const presentes = consolidado.asistio + consolidado.tarde;
+    const posibles = presentes + consolidado.falta;
+    const alumnos = filasVisibles.length;
+    const dias = alumnos > 0 ? Math.round(posibles / alumnos) : 0;
+    return { presentes, posibles, alumnos, dias };
+  }, [consolidado, filasVisibles]);
+
   const barrasDiarias = useMemo(() => {
     const fechas = Object.keys(tardanzasPorDia).sort().slice(-5);
     const max = Math.max(1, ...fechas.map((f) => tardanzasPorDia[f]));
@@ -304,7 +316,12 @@ export default function ReportesAuxiliar() {
             <span className="font-display-lg text-display-lg text-on-surface">{porcentajeAsistencia}%</span>
           </div>
           <p className="font-label-md text-label-md text-on-surface-variant">
-            {consolidado.asistio + consolidado.tarde} presentes de {consolidado.asistio + consolidado.tarde + consolidado.falta} días-alumno
+            {resumenAsistencia.presentes.toLocaleString('es-PE')} asistencias de{' '}
+            {resumenAsistencia.posibles.toLocaleString('es-PE')} posibles
+          </p>
+          <p className="font-label-md text-label-md text-on-surface-variant/70 mt-0.5">
+            {resumenAsistencia.alumnos.toLocaleString('es-PE')} alumnos × {resumenAsistencia.dias}{' '}
+            {resumenAsistencia.dias === 1 ? 'día de clase' : 'días de clase'}
           </p>
           <div className="mt-4 w-full bg-surface-container h-2 rounded-full overflow-hidden">
             <div className="bg-primary h-full rounded-full" style={{ width: `${porcentajeAsistencia}%` }} />
