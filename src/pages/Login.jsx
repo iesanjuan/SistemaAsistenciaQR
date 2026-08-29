@@ -35,7 +35,7 @@ export default function Login() {
           <img src="/logo.png" alt="Escudo Colegio San Juan" className="w-12 h-12 object-contain shrink-0" />
           <div>
             <h1 className="font-headline-md text-headline-md font-black text-primary leading-tight">
-              Asistencia Sanjuanino
+              Asistencia San Juan
             </h1>
             <p className="text-on-surface-variant text-label-md">Acceso de auxiliares y administración</p>
           </div>
