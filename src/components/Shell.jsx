@@ -160,8 +160,13 @@ export default function Shell({ children }) {
         <ProfileMenu />
       </header>
 
-      {/* MAIN CONTENT */}
-      <main className="flex-1 md:ml-20 lg:ml-[280px] w-full pb-24 md:pb-0 min-h-screen">{children}</main>
+      {/* MAIN CONTENT.
+          Usamos PADDING (no margen) para dejar sitio al riel/sidebar fijo: con
+          box-sizing border-box el padding queda dentro del 100% de ancho, así
+          no se genera scroll horizontal. */}
+      <main className="flex-1 w-full max-w-full overflow-x-clip md:pl-20 lg:pl-[280px] pb-24 md:pb-0 min-h-screen">
+        {children}
+      </main>
 
       {/* BOTTOM NAV (solo Móvil <768px) */}
       <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-2 md:hidden bg-surface border-t border-outline-variant shadow-lg">
