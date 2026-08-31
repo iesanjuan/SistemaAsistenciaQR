@@ -276,25 +276,35 @@ export default function EscanerQR() {
           <label htmlFor="selector-turno" className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
             Turno
           </label>
-          <div className="relative w-full md:w-56">
-            <Icon
-              name={turno === TURNOS.MANANA ? 'wb_sunny' : 'wb_twilight'}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-primary text-[20px]"
-            />
-            <select
-              id="selector-turno"
-              value={turno}
-              onChange={(e) => setTurno(e.target.value)}
-              disabled={escaneando || (!esAdmin && !!perfil?.turno)}
-              className="appearance-none w-full pl-10 pr-9 py-2.5 font-title-md text-title-md rounded-xl bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
+          <div className="flex items-center gap-2">
+            <div className="relative w-full md:w-56">
+              <Icon
+                name={turno === TURNOS.MANANA ? 'wb_sunny' : 'wb_twilight'}
+                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-primary text-[20px]"
+              />
+              <select
+                id="selector-turno"
+                value={turno}
+                onChange={(e) => setTurno(e.target.value)}
+                disabled={escaneando || (!esAdmin && !!perfil?.turno)}
+                className="appearance-none w-full pl-10 pr-9 py-2.5 font-title-md text-title-md rounded-xl bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <option value={TURNOS.MANANA}>Turno Mañana</option>
+                <option value={TURNOS.TARDE}>Turno Tarde</option>
+              </select>
+              <Icon
+                name="expand_more"
+                className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]"
+              />
+            </div>
+            {/* Tolerancia: chip compacto al costado del selector de turno. */}
+            <span
+              title="Tolerancia: hora límite para marcar como ASISTIÓ"
+              className="flex items-center gap-1 shrink-0 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2 py-1.5 font-label-md text-label-md whitespace-nowrap tabular-nums"
             >
-              <option value={TURNOS.MANANA}>Turno Mañana</option>
-              <option value={TURNOS.TARDE}>Turno Tarde</option>
-            </select>
-            <Icon
-              name="expand_more"
-              className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]"
-            />
+              <Icon name="timer" className="text-[16px]" />
+              {formatearHoraDesdeTexto(horario.tolerancia)}
+            </span>
           </div>
         </div>
 
@@ -311,22 +321,9 @@ export default function EscanerQR() {
           </div>
         </div>
 
-        {/* Tolerancia (derecha) */}
-        <div className="w-full md:w-auto md:justify-self-end">
-          <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5">
-            <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-amber-100 text-amber-700 shrink-0">
-              <Icon name="timer" className="text-[20px]" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-amber-700 font-label-md text-label-md uppercase tracking-wider leading-none">
-                Tolerancia hasta
-              </p>
-              <p className="text-amber-900 font-title-md text-title-md leading-tight tabular-nums">
-                {formatearHoraDesdeTexto(horario.tolerancia)}
-              </p>
-            </div>
-          </div>
-        </div>
+        {/* Columna derecha vacía (espaciador) para que el reloj quede centrado
+            en md. La tolerancia ahora va junto al selector de turno. */}
+        <div className="hidden md:block md:justify-self-end" />
       </div>
 
       {/* Layout Split */}
