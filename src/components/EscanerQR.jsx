@@ -85,6 +85,7 @@ export default function EscanerQR() {
   const [procesando, setProcesando] = useState(false);
   const [reloj, setReloj] = useState(new Date());
   const [registros, setRegistros] = useState([]);
+  const [panelAbierto, setPanelAbierto] = useState(false);
   const scannerRef = useRef(null);
   const cierreTimeoutRef = useRef(null);
 
@@ -270,37 +271,37 @@ export default function EscanerQR() {
     <div className="flex-1 bg-background flex flex-col h-[calc(100dvh-64px-72px)] md:h-screen relative">
       {/* Control Header — tres columnas iguales (turno · reloj · tolerancia) para
           que el reloj quede centrado de verdad y los extremos queden simétricos. */}
-      <div className="bg-surface shadow-sm border-b border-outline-variant px-margin-mobile md:px-margin-desktop py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 z-10 no-print">
+      <div className="bg-surface shadow-sm border-b border-outline-variant px-margin-mobile md:px-margin-desktop py-4 flex flex-col md:flex-row md:items-center gap-3 z-10 no-print">
         {/* Turno + tolerancia (izquierda) */}
-        <div className="flex flex-col gap-1 w-full md:w-auto">
+        <div className="flex flex-col gap-1 w-full md:w-auto md:flex-1 md:min-w-0">
           <label htmlFor="selector-turno" className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
             Turno
           </label>
           <div className="flex items-center gap-2">
-            <div className="relative w-full md:w-44">
+            <div className="relative w-full md:w-40">
               <Icon
                 name={turno === TURNOS.MANANA ? 'wb_sunny' : 'wb_twilight'}
-                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-primary text-[18px]"
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-primary text-[16px]"
               />
               <select
                 id="selector-turno"
                 value={turno}
                 onChange={(e) => setTurno(e.target.value)}
                 disabled={escaneando || (!esAdmin && !!perfil?.turno)}
-                className="appearance-none w-full pl-9 pr-8 py-1.5 font-label-md text-label-md rounded-lg bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
+                className="appearance-none w-full h-9 pl-8 pr-7 font-label-md text-label-md rounded-lg bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value={TURNOS.MANANA}>Turno Mañana</option>
                 <option value={TURNOS.TARDE}>Turno Tarde</option>
               </select>
               <Icon
                 name="expand_more"
-                className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]"
+                className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]"
               />
             </div>
             {/* Tolerancia: chip compacto al costado del selector de turno. */}
             <span
               title="Tolerancia: hora límite para marcar como ASISTIÓ"
-              className="flex items-center gap-1 shrink-0 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2 py-1.5 font-label-md text-label-md whitespace-nowrap tabular-nums"
+              className="flex items-center gap-1 shrink-0 h-9 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2.5 font-label-md text-label-md whitespace-nowrap tabular-nums"
             >
               <Icon name="timer" className="text-[16px]" />
               {formatearHoraDesdeTexto(horario.tolerancia)}
@@ -308,23 +309,40 @@ export default function EscanerQR() {
           </div>
         </div>
 
-        {/* Reloj y fecha (derecha) */}
-        <div className="flex flex-col items-center md:items-end shrink-0">
-          <div className="font-display-lg text-4xl md:text-display-lg text-primary tracking-tight tabular-nums leading-none">
+        {/* Reloj y fecha (centro) */}
+        <div className="flex flex-col items-center shrink-0">
+          <div className="font-display-lg text-2xl md:text-4xl text-primary tracking-tight tabular-nums leading-none">
             {relojPartes(reloj).hora}
             <sup className="text-[0.4em] font-bold align-super ml-1 uppercase tracking-wide">
               {relojPartes(reloj).meridiano}
             </sup>
           </div>
-          <div className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider mt-1.5 text-center">
+          <div className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider mt-1 text-center">
             {reloj.toLocaleDateString('es-PE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
           </div>
         </div>
 
+        {/* Botón "Registros" (abre el cajón), compacto, a la derecha. */}
+        <div className="md:flex-1 flex justify-end shrink-0">
+          <button
+            onClick={() => setPanelAbierto(true)}
+            title="Ver registro reciente de marcaciones"
+            className="relative flex items-center gap-1.5 h-9 px-2.5 rounded-lg border border-outline-variant bg-surface-container-lowest text-on-surface hover:bg-surface-container-high transition-colors font-label-md text-label-md shrink-0"
+          >
+            <Icon name="history" className="text-primary text-[18px]" />
+            <span className="hidden lg:inline">Registros</span>
+            {registros.length > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-on-primary text-[10px] font-bold flex items-center justify-center">
+                {registros.length}
+              </span>
+            )}
+          </button>
+        </div>
+
       </div>
 
-      {/* Layout Split */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden relative">
+      {/* Área de cámara (ocupa todo el espacio; el registro va en un cajón). */}
+      <div className="flex-1 flex overflow-hidden relative">
         {/* Scanner Viewport */}
         <div className="flex-1 bg-black relative flex items-center justify-center overflow-hidden min-h-[320px]">
           {/* El tamaño/centrado del <video> y el ocultado de los elementos
@@ -369,48 +387,66 @@ export default function EscanerQR() {
           )}
         </div>
 
-        {/* Recent Log Panel */}
-        <div className="w-full lg:w-[400px] bg-surface flex flex-col border-t lg:border-t-0 lg:border-l border-outline-variant shadow-[-4px_0_15px_rgba(0,0,0,0.05)] h-1/3 lg:h-auto z-10">
-          <div className="p-4 border-b border-outline-variant bg-surface-container-lowest sticky top-0 flex justify-between items-center">
-            <h3 className="font-title-lg text-title-lg text-on-surface flex items-center gap-2">
-              <Icon name="history" className="text-primary" />
-              Registro Reciente
-            </h3>
-            <span className="bg-surface-container-high text-primary px-2 py-1 rounded-md font-label-md text-label-md">
-              Hoy: {registros.length}
-            </span>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-            {registros.length === 0 && (
-              <p className="text-on-surface-variant text-sm text-center py-8">Aún no hay marcaciones hoy.</p>
-            )}
-            {registros.map((r) => {
-              const estilo = LOG_ESTILOS[r.tipo] || LOG_ESTILOS.TARDE;
-              return (
-                <div
-                  key={r.id}
-                  className="bg-surface-container-lowest border border-outline-variant rounded-lg p-3 flex items-center gap-3 hover:bg-surface-container-low transition-colors shadow-sm"
-                >
-                  <div className={`w-2 h-full min-h-[48px] ${estilo.barra} rounded-full`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-start gap-2">
-                      <p className="font-title-md text-title-md text-on-surface leading-tight truncate">{r.nombre}</p>
-                      <span className="font-label-md text-label-md text-on-surface-variant shrink-0">
-                        {formatearHoraDesdeTexto(r.hora)}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center mt-1 gap-2">
-                      <p className="font-body-md text-body-md text-on-surface-variant truncate">{r.gradoSeccion}</p>
-                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-sm shrink-0 ${estilo.chip}`}>
-                        {estilo.label}
-                      </span>
-                    </div>
-                  </div>
+        {/* Cajón lateral de "Registro Reciente": se abre desde la derecha al
+            tocar el botón "Registros". Por defecto la cámara ocupa todo. */}
+        {panelAbierto && (
+          <>
+            <div
+              className="fixed inset-0 bg-black/40 z-40 no-print"
+              onClick={() => setPanelAbierto(false)}
+            />
+            <aside className="fixed top-0 right-0 h-full w-full sm:w-[380px] max-w-full bg-surface z-50 shadow-2xl border-l border-outline-variant flex flex-col no-print">
+              <div className="p-4 border-b border-outline-variant bg-surface-container-lowest flex justify-between items-center">
+                <h3 className="font-title-lg text-title-lg text-on-surface flex items-center gap-2">
+                  <Icon name="history" className="text-primary" />
+                  Registro Reciente
+                </h3>
+                <div className="flex items-center gap-2">
+                  <span className="bg-surface-container-high text-primary px-2 py-1 rounded-md font-label-md text-label-md">
+                    Hoy: {registros.length}
+                  </span>
+                  <button
+                    onClick={() => setPanelAbierto(false)}
+                    title="Cerrar"
+                    className="p-1.5 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors"
+                  >
+                    <Icon name="close" />
+                  </button>
                 </div>
-              );
-            })}
-          </div>
-        </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+                {registros.length === 0 && (
+                  <p className="text-on-surface-variant text-sm text-center py-8">Aún no hay marcaciones hoy.</p>
+                )}
+                {registros.map((r) => {
+                  const estilo = LOG_ESTILOS[r.tipo] || LOG_ESTILOS.TARDE;
+                  return (
+                    <div
+                      key={r.id}
+                      className="bg-surface-container-lowest border border-outline-variant rounded-lg p-3 flex items-center gap-3 hover:bg-surface-container-low transition-colors shadow-sm"
+                    >
+                      <div className={`w-2 h-full min-h-[48px] ${estilo.barra} rounded-full`} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-start gap-2">
+                          <p className="font-title-md text-title-md text-on-surface leading-tight truncate">{r.nombre}</p>
+                          <span className="font-label-md text-label-md text-on-surface-variant shrink-0">
+                            {formatearHoraDesdeTexto(r.hora)}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center mt-1 gap-2">
+                          <p className="font-body-md text-body-md text-on-surface-variant truncate">{r.gradoSeccion}</p>
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-sm shrink-0 ${estilo.chip}`}>
+                            {estilo.label}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </aside>
+          </>
+        )}
       </div>
     </div>
   );
