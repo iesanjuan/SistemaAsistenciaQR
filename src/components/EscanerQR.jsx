@@ -267,7 +267,7 @@ export default function EscanerQR() {
   const horario = HORARIOS[turno];
 
   return (
-    <div className="flex-1 md:ml-0 bg-background flex flex-col h-[calc(100dvh-64px-72px)] md:h-screen relative">
+    <div className="flex-1 lg:ml-0 bg-background flex flex-col h-[calc(100dvh-64px-72px)] lg:h-screen relative">
       {/* Control Header — tres columnas iguales (turno · reloj · tolerancia) para
           que el reloj quede centrado de verdad y los extremos queden simétricos. */}
       <div className="bg-surface shadow-sm border-b border-outline-variant px-margin-mobile md:px-margin-desktop py-4 grid grid-cols-1 md:grid-cols-3 items-center gap-4 z-10 no-print">
