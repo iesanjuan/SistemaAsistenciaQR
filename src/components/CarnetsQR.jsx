@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../lib/supabaseClient';
 import { useUI } from '../lib/UIContext';
@@ -46,13 +46,34 @@ function envolverTexto(ctx, texto, maxWidth, maxLineas) {
   return lineas.slice(0, maxLineas);
 }
 
+// Orden estándar de los carnets: por grado (1ro→5to), luego por sección, y
+// dentro de cada sección alfabético por apellidos y nombres.
+function compararEstudiantes(a, b) {
+  const ga = Number(gradoNumero(a.grado)) || 0;
+  const gb = Number(gradoNumero(b.grado)) || 0;
+  if (ga !== gb) return ga - gb;
+  const sa = String(a.seccion || '').trim().toUpperCase();
+  const sb = String(b.seccion || '').trim().toUpperCase();
+  if (sa !== sb) return sa.localeCompare(sb, 'es');
+  return `${a.apellidos} ${a.nombres}`.localeCompare(`${b.apellidos} ${b.nombres}`, 'es');
+}
+
 export default function CarnetsQR() {
   const { toast } = useUI();
   const [estudiantes, setEstudiantes] = useState([]);
   const [cargando, setCargando] = useState(true);
   const [busqueda, setBusqueda] = useState('');
   const [turno, setTurno] = useState('todos');
-  const [gradoSeccion, setGradoSeccion] = useState('all');
+  // Secciones (grado+sección) elegidas para mostrar/imprimir. Vacío = TODAS.
+  // Es un Set para poder elegir VARIAS a la vez (p. ej. 1F, 1G y 2H) y juntar
+  // en una sola hoja las secciones con pocos alumnos.
+  const [gradosSel, setGradosSel] = useState(() => new Set());
+  const [menuAbierto, setMenuAbierto] = useState(false);
+  const menuRef = useRef(null);
+  // Ids de alumnos marcados uno por uno (p. ej. varios que perdieron su carnet,
+  // de distintos grados/secciones). PERSISTE al cambiar de filtro o búsqueda,
+  // para poder juntarlos e imprimirlos como un solo grupo.
+  const [seleccionados, setSeleccionados] = useState(() => new Set());
 
   useEffect(() => {
     cargarEstudiantes();
@@ -90,7 +111,7 @@ export default function CarnetsQR() {
     return estudiantes
       .filter((e) => {
         if (turno !== 'todos' && e.turno !== turno) return false;
-        if (gradoSeccion !== 'all' && `${e.grado}|${e.seccion}` !== gradoSeccion) return false;
+        if (gradosSel.size > 0 && !gradosSel.has(`${e.grado}|${e.seccion}`)) return false;
         if (busqueda) {
           const q = busqueda.toLowerCase();
           const nombreCompleto = `${e.apellidos} ${e.nombres}`.toLowerCase();
@@ -98,26 +119,83 @@ export default function CarnetsQR() {
         }
         return true;
       })
-      // Orden: por grado (1ro→5to), luego por sección, y dentro de cada
-      // sección alfabético por apellidos y nombres.
-      .sort((a, b) => {
-        const ga = Number(gradoNumero(a.grado)) || 0;
-        const gb = Number(gradoNumero(b.grado)) || 0;
-        if (ga !== gb) return ga - gb;
-        const sa = String(a.seccion || '').trim().toUpperCase();
-        const sb = String(b.seccion || '').trim().toUpperCase();
-        if (sa !== sb) return sa.localeCompare(sb, 'es');
-        return `${a.apellidos} ${a.nombres}`.localeCompare(`${b.apellidos} ${b.nombres}`, 'es');
-      });
-  }, [estudiantes, turno, gradoSeccion, busqueda]);
+      .sort(compararEstudiantes);
+  }, [estudiantes, turno, gradosSel, busqueda]);
+
+  // Cierra el menú de secciones al hacer clic fuera de él.
+  useEffect(() => {
+    if (!menuAbierto) return;
+    function alClic(ev) {
+      if (menuRef.current && !menuRef.current.contains(ev.target)) setMenuAbierto(false);
+    }
+    document.addEventListener('mousedown', alClic);
+    return () => document.removeEventListener('mousedown', alClic);
+  }, [menuAbierto]);
+
+  // Al cambiar de turno, las secciones válidas cambian: limpiamos la selección
+  // para no quedar filtrando por secciones de otro turno.
+  function cambiarTurno(nuevo) {
+    setTurno(nuevo);
+    setGradosSel(new Set());
+  }
+
+  function alternarGrado(key) {
+    setGradosSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function seleccionarTodasSecciones() {
+    setGradosSel(new Set(gradoSeccionOpciones.map(([key]) => key)));
+  }
+
+  function limpiarSecciones() {
+    setGradosSel(new Set());
+  }
+
+  // --- Selección individual de alumnos (grupo suelto para reimprimir) ---
+  const seleccionadosLista = useMemo(
+    () => estudiantes.filter((e) => seleccionados.has(e.id)).sort(compararEstudiantes),
+    [estudiantes, seleccionados]
+  );
+
+  function alternarSeleccion(id) {
+    setSeleccionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function limpiarSeleccion() {
+    setSeleccionados(new Set());
+  }
+
+  // Texto resumen para el botón del menú de secciones.
+  const resumenSecciones = useMemo(() => {
+    if (gradosSel.size === 0) return 'Todas las secciones';
+    const etiquetas = gradoSeccionOpciones
+      .filter(([key]) => gradosSel.has(key))
+      .map(([, { label }]) => label);
+    if (etiquetas.length === 0) return 'Todas las secciones';
+    if (etiquetas.length <= 2) return etiquetas.join(', ');
+    return `${etiquetas.length} secciones seleccionadas`;
+  }, [gradosSel, gradoSeccionOpciones]);
 
   // Genera un documento aislado SOLO con los carnets filtrados y lo manda a
   // imprimir. Como abre el diálogo de impresión del navegador, el usuario
   // puede elegir "Guardar como PDF". Usa un iframe oculto (evita bloqueadores
   // de pop-ups y no captura la pantalla de la app).
-  function imprimirCarnets() {
-    if (filtrados.length === 0) return;
-    toast(`Generando PDF de ${filtrados.length} carnet(s)…`, 'info');
+  // Imprime una lista de carnets. Por defecto imprime lo filtrado, pero se le
+  // puede pasar un solo alumno (p. ej. desde el botón "imprimir" de su tarjeta)
+  // para reimprimir un carnet perdido o dañado.
+  function imprimirCarnets(lista = filtrados) {
+    if (lista.length === 0) return;
+    toast(`Generando PDF de ${lista.length} carnet(s)…`, 'info');
 
     const escapar = (t) =>
       String(t ?? '')
@@ -126,9 +204,11 @@ export default function CarnetsQR() {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
 
-    const tarjetas = filtrados
+    const tarjetas = lista
       .map((e) => {
-        const svg = document.getElementById(`qr-${e.id}`);
+        // El QR puede estar en la tarjeta visible (`qr-…`) o, si el alumno está
+        // seleccionado pero fuera del filtro actual, en el pool oculto (`qrprint-…`).
+        const svg = document.getElementById(`qr-${e.id}`) || document.getElementById(`qrprint-${e.id}`);
         const qr = svg ? new XMLSerializer().serializeToString(svg) : '';
         const turnoClase = e.turno === 'MANANA' ? 'manana' : 'tarde';
         const turnoLabel = e.turno === 'MANANA' ? 'Mañana' : 'Tarde';
@@ -334,7 +414,7 @@ export default function CarnetsQR() {
             </p>
           </div>
           <button
-            onClick={imprimirCarnets}
+            onClick={() => imprimirCarnets()}
             disabled={filtrados.length === 0}
             className="hidden md:flex items-center px-6 py-2.5 bg-primary text-on-primary rounded-full font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors shadow-sm no-print disabled:opacity-50"
           >
@@ -360,10 +440,7 @@ export default function CarnetsQR() {
               <label className="block font-label-md text-label-md text-on-surface-variant mb-1">Turno</label>
               <select
                 value={turno}
-                onChange={(e) => {
-                  setTurno(e.target.value);
-                  setGradoSeccion('all');
-                }}
+                onChange={(e) => cambiarTurno(e.target.value)}
                 className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-on-surface focus:outline-none focus:border-secondary transition-all text-body-md"
               >
                 <option value="todos">Todos los Turnos</option>
@@ -371,22 +448,66 @@ export default function CarnetsQR() {
                 <option value="TARDE">Tarde</option>
               </select>
             </div>
-            <div>
+            {/* Grado y Sección: menú con casillas para elegir VARIAS secciones. */}
+            <div className="relative" ref={menuRef}>
               <label className="block font-label-md text-label-md text-on-surface-variant mb-1">
                 Grado y Sección
               </label>
-              <select
-                value={gradoSeccion}
-                onChange={(e) => setGradoSeccion(e.target.value)}
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-on-surface focus:outline-none focus:border-secondary transition-all text-body-md"
+              <button
+                type="button"
+                onClick={() => setMenuAbierto((v) => !v)}
+                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-on-surface text-left flex items-center justify-between gap-2 focus:outline-none focus:border-secondary transition-all text-body-md"
               >
-                <option value="all">Todas las Secciones</option>
-                {gradoSeccionOpciones.map(([key, { label }]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
+                <span className="truncate">{resumenSecciones}</span>
+                <Icon name={menuAbierto ? 'expand_less' : 'expand_more'} className="text-[20px] shrink-0" />
+              </button>
+
+              {menuAbierto && (
+                <div className="absolute z-30 mt-1 w-full max-h-72 overflow-auto bg-surface border border-outline-variant rounded-lg shadow-lg p-1">
+                  <div className="flex justify-between px-2 py-1.5 border-b border-outline-variant mb-1">
+                    <button
+                      onClick={seleccionarTodasSecciones}
+                      className="font-label-md text-label-md text-primary hover:underline"
+                    >
+                      Seleccionar todas
+                    </button>
+                    <button
+                      onClick={limpiarSecciones}
+                      className="font-label-md text-label-md text-on-surface-variant hover:underline"
+                    >
+                      Ninguna
+                    </button>
+                  </div>
+
+                  {gradoSeccionOpciones.length === 0 && (
+                    <p className="px-2 py-2 font-body-md text-body-md text-on-surface-variant">
+                      No hay secciones para este turno.
+                    </p>
+                  )}
+
+                  {gradoSeccionOpciones.map(([key, { label }]) => {
+                    const activo = gradosSel.has(key);
+                    return (
+                      <button
+                        key={key}
+                        onClick={() => alternarGrado(key)}
+                        className={`w-full flex items-center gap-2 px-2 py-2 rounded-md text-left font-body-md text-body-md hover:bg-surface-container-high transition-colors ${
+                          activo ? 'text-on-surface' : 'text-on-surface-variant'
+                        }`}
+                      >
+                        <span
+                          className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
+                            activo ? 'bg-primary border-primary text-on-primary' : 'border-outline text-transparent'
+                          }`}
+                        >
+                          <Icon name="check" className="text-[16px]" />
+                        </span>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             <div className="md:col-span-1 flex items-end justify-end">
               <span className="font-body-md text-body-md text-on-surface-variant">
@@ -394,19 +515,95 @@ export default function CarnetsQR() {
               </span>
             </div>
           </div>
+
+          {/* Resumen de secciones elegidas (chips) para dejar claro qué se imprime. */}
+          {gradosSel.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 mt-3">
+              {gradoSeccionOpciones
+                .filter(([key]) => gradosSel.has(key))
+                .map(([key, { label }]) => (
+                  <span
+                    key={key}
+                    className="inline-flex items-center gap-1 pl-3 pr-1 py-1 rounded-full bg-primary-container text-on-primary-container font-label-md text-label-md"
+                  >
+                    {label}
+                    <button
+                      onClick={() => alternarGrado(key)}
+                      title="Quitar esta sección"
+                      className="w-5 h-5 flex items-center justify-center rounded-full hover:bg-on-primary-container/10"
+                    >
+                      <Icon name="close" className="text-[16px]" />
+                    </button>
+                  </span>
+                ))}
+              <button
+                onClick={limpiarSecciones}
+                className="font-label-md text-label-md text-error hover:underline ml-1"
+              >
+                Limpiar
+              </button>
+            </div>
+          )}
         </div>
+
+        {/* Barra de alumnos marcados uno por uno: para reimprimir un grupo de
+            carnets sueltos (p. ej. varios que se perdieron) sin importar de qué
+            grado/sección sean. */}
+        {seleccionadosLista.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 mb-4 no-print bg-primary-container/40 border border-primary/30 rounded-xl p-3">
+            <Icon name="badge" className="text-primary text-[22px]" />
+            <span className="font-label-md text-label-md text-on-surface">
+              {seleccionadosLista.length} alumno(s) marcado(s) para reimprimir
+            </span>
+            <button
+              onClick={() => imprimirCarnets(seleccionadosLista)}
+              className="flex items-center gap-2 px-4 py-2 rounded-full bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors"
+            >
+              <Icon name="print" className="text-[20px]" />
+              Imprimir seleccionados
+            </button>
+            <button
+              onClick={limpiarSeleccion}
+              className="flex items-center gap-1 px-3 py-2 rounded-full text-error font-label-md text-label-md hover:bg-error-container/40 transition-colors"
+            >
+              <Icon name="close" className="text-[18px]" />
+              Limpiar
+            </button>
+          </div>
+        )}
 
         {cargando && <Cargador texto="Cargando estudiantes…" className="py-16 no-print" />}
 
         {/* Cards Grid (Print Area) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6" id="print-area">
-          {filtrados.map((e) => (
+          {filtrados.map((e) => {
+            const marcado = seleccionados.has(e.id);
+            return (
             <div
               key={e.id}
-              className="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow break-inside-avoid"
+              className={`relative bg-surface-container-lowest rounded-xl border shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow break-inside-avoid ${
+                marcado ? 'border-primary ring-2 ring-primary' : 'border-outline-variant'
+              }`}
             >
+              {/* Casilla para marcar este alumno y reimprimir en grupo */}
+              <button
+                onClick={() => alternarSeleccion(e.id)}
+                title={marcado ? 'Quitar de la reimpresión' : 'Marcar para reimprimir en grupo'}
+                aria-pressed={marcado}
+                className={`absolute top-4 left-3 z-10 w-5 h-5 rounded flex items-center justify-center border transition-colors no-print ${
+                  marcado
+                    ? 'bg-primary border-primary text-on-primary'
+                    : 'bg-surface/90 border-outline text-transparent hover:border-primary'
+                }`}
+              >
+                <Icon name="check" className="text-[14px]" />
+              </button>
               <div className={`h-2 w-full ${e.turno === 'MANANA' ? 'bg-amber-500' : 'bg-indigo-500'}`} />
-              <div className="p-5 flex flex-col items-center flex-1">
+              <div
+                onClick={() => alternarSeleccion(e.id)}
+                title="Clic para marcar/desmarcar este carnet"
+                className="p-5 flex flex-col items-center flex-1 cursor-pointer"
+              >
                 <div className="w-32 h-32 flex items-center justify-center border border-outline-variant p-2 rounded-lg bg-white">
                   <QRCodeSVG id={`qr-${e.id}`} value={e.dni} size={112} level="M" />
                 </div>
@@ -426,12 +623,18 @@ export default function CarnetsQR() {
               </div>
               <div className="bg-surface-container-low px-4 py-3 border-t border-outline-variant flex justify-between items-center no-print">
                 <span className="font-label-md text-label-md text-primary cursor-default">{e.dni}</span>
-                <button onClick={() => descargarCarnet(e)} title="Descargar carnet (PNG)">
-                  <Icon name="download" className="text-outline hover:text-primary cursor-pointer" />
-                </button>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => imprimirCarnets([e])} title="Imprimir solo este carnet (PDF)">
+                    <Icon name="print" className="text-outline hover:text-primary cursor-pointer" />
+                  </button>
+                  <button onClick={() => descargarCarnet(e)} title="Descargar carnet (PNG)">
+                    <Icon name="download" className="text-outline hover:text-primary cursor-pointer" />
+                  </button>
+                </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {!cargando && filtrados.length === 0 && (
@@ -441,9 +644,18 @@ export default function CarnetsQR() {
         )}
       </div>
 
+      {/* Pool OCULTO de QR: garantiza que cada alumno seleccionado tenga su SVG
+          disponible al imprimir aunque no esté visible en el filtro actual.
+          Fuera de pantalla (no display:none) para que el SVG se renderice. */}
+      <div aria-hidden="true" style={{ position: 'fixed', left: '-99999px', top: 0, width: 0, height: 0, overflow: 'hidden' }}>
+        {seleccionadosLista.map((e) => (
+          <QRCodeSVG key={e.id} id={`qrprint-${e.id}`} value={e.dni} size={112} level="M" />
+        ))}
+      </div>
+
       {/* Mobile FAB */}
       <button
-        onClick={imprimirCarnets}
+        onClick={() => imprimirCarnets()}
         disabled={filtrados.length === 0}
         className="md:hidden fixed bottom-24 right-4 z-40 bg-primary text-on-primary w-14 h-14 rounded-full shadow-lg flex items-center justify-center hover:bg-primary-container active:scale-95 transition-transform no-print disabled:opacity-50"
       >
