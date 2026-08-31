@@ -10,6 +10,7 @@ const ITEMS = [
   { to: '/escaner', label: 'Escáner de Asistencia', labelCorto: 'Escáner', icon: 'qr_code_scanner', soloAdmin: false },
   { to: '/reportes', label: 'Reportes', labelCorto: 'Reportes', icon: 'analytics', soloAdmin: true },
   { to: '/usuarios', label: 'Gestión de Usuarios', labelCorto: 'Usuarios', icon: 'manage_accounts', soloAdmin: true },
+  { to: '/dias-no-lectivos', label: 'Días no lectivos', labelCorto: 'Feriados', icon: 'event_busy', soloAdmin: true },
   { to: '/perfil', label: 'Mi Perfil', labelCorto: 'Perfil', icon: 'account_circle', soloAdmin: false },
 ];
 

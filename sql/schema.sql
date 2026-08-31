@@ -126,6 +126,24 @@ create index idx_asistencias_fecha on asistencias (fecha);
 create index idx_asistencias_estudiante on asistencias (estudiante_id);
 
 -- ----------------------------------------------------------------------------
+-- 5b. Tabla dias_no_lectivos (por rangos)
+--     Rangos de fechas sin clases (feriados, vacaciones). Un día suelto es un
+--     rango de un día (fecha_inicio = fecha_fin). El reporte de asistencia
+--     excluye cualquier día dentro de un rango para no contar falta esos días.
+-- ----------------------------------------------------------------------------
+
+create table dias_no_lectivos (
+  id            uuid primary key default gen_random_uuid(),
+  tipo          text not null default 'OTRO',   -- FERIADO | VACACIONES | OTRO
+  fecha_inicio  date not null,
+  fecha_fin     date not null,
+  motivo        text not null,
+  created_at    timestamptz not null default now(),
+  constraint dias_no_lectivos_rango_valido check (fecha_fin >= fecha_inicio),
+  constraint dias_no_lectivos_tipo_valido  check (tipo in ('FERIADO', 'VACACIONES', 'OTRO'))
+);
+
+-- ----------------------------------------------------------------------------
 -- 6. Funciones auxiliares (SECURITY DEFINER) para evaluar el perfil del
 --    usuario autenticado sin caer en recursión de RLS.
 -- ----------------------------------------------------------------------------
@@ -168,6 +186,17 @@ alter table perfiles_auxiliares enable row level security;
 alter table auxiliar_secciones enable row level security;
 alter table estudiantes enable row level security;
 alter table asistencias enable row level security;
+alter table dias_no_lectivos enable row level security;
+
+-- dias_no_lectivos: cualquier autenticado los lee; solo el admin los gestiona.
+create policy "dias_no_lectivos_select_autenticado"
+  on dias_no_lectivos for select
+  using (auth.uid() is not null);
+
+create policy "dias_no_lectivos_admin_gestiona"
+  on dias_no_lectivos for all
+  using (es_admin())
+  with check (es_admin());
 
 -- perfiles_auxiliares: cada usuario ve su propio perfil; el admin ve todos.
 create policy "perfiles_select_propio_o_admin"
@@ -306,6 +335,10 @@ begin
     on a.estudiante_id = e.id and a.fecha = d.fecha::date
   where e.activo = true
     and extract(dow from d.fecha) not in (0, 6) -- excluye sábado y domingo
+    and not exists (                            -- excluye días dentro de un rango no lectivo
+      select 1 from dias_no_lectivos dnl
+      where d.fecha::date between dnl.fecha_inicio and dnl.fecha_fin
+    )
     and (p_turno is null or e.turno = p_turno)
     and (p_grado is null or e.grado = p_grado)
     and (p_seccion is null or e.seccion = p_seccion)

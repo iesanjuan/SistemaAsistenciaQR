@@ -6,6 +6,7 @@ import CarnetsQR from './components/CarnetsQR';
 import EscanerQR from './components/EscanerQR';
 import ReportesAuxiliar from './components/ReportesAuxiliar';
 import GestionUsuarios from './components/GestionUsuarios';
+import DiasNoLectivos from './components/DiasNoLectivos';
 import Perfil from './components/Perfil';
 import Shell from './components/Shell';
 import Cargador from './components/Cargador';
@@ -77,6 +78,14 @@ export default function App() {
           element={
             <RutaAdmin>
               <GestionUsuarios />
+            </RutaAdmin>
+          }
+        />
+        <Route
+          path="/dias-no-lectivos"
+          element={
+            <RutaAdmin>
+              <DiasNoLectivos />
             </RutaAdmin>
           }
         />
