@@ -277,24 +277,24 @@ export default function EscanerQR() {
             Turno
           </label>
           <div className="flex items-center gap-2">
-            <div className="relative w-full md:w-56">
+            <div className="relative w-full md:w-44">
               <Icon
                 name={turno === TURNOS.MANANA ? 'wb_sunny' : 'wb_twilight'}
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-primary text-[20px]"
+                className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-primary text-[18px]"
               />
               <select
                 id="selector-turno"
                 value={turno}
                 onChange={(e) => setTurno(e.target.value)}
                 disabled={escaneando || (!esAdmin && !!perfil?.turno)}
-                className="appearance-none w-full pl-10 pr-9 py-2.5 font-title-md text-title-md rounded-xl bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
+                className="appearance-none w-full pl-9 pr-8 py-1.5 font-label-md text-label-md rounded-lg bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <option value={TURNOS.MANANA}>Turno Mañana</option>
                 <option value={TURNOS.TARDE}>Turno Tarde</option>
               </select>
               <Icon
                 name="expand_more"
-                className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]"
+                className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]"
               />
             </div>
             {/* Tolerancia: chip compacto al costado del selector de turno. */}
