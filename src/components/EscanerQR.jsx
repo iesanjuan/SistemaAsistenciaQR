@@ -267,12 +267,12 @@ export default function EscanerQR() {
   const horario = HORARIOS[turno];
 
   return (
-    <div className="flex-1 lg:ml-0 bg-background flex flex-col h-[calc(100dvh-64px-72px)] lg:h-screen relative">
+    <div className="flex-1 bg-background flex flex-col h-[calc(100dvh-64px-72px)] md:h-screen relative">
       {/* Control Header — tres columnas iguales (turno · reloj · tolerancia) para
           que el reloj quede centrado de verdad y los extremos queden simétricos. */}
-      <div className="bg-surface shadow-sm border-b border-outline-variant px-margin-mobile md:px-margin-desktop py-4 grid grid-cols-1 md:grid-cols-3 items-center gap-4 z-10 no-print">
-        {/* Turno (izquierda) */}
-        <div className="flex flex-col gap-1 w-full md:w-auto md:justify-self-start">
+      <div className="bg-surface shadow-sm border-b border-outline-variant px-margin-mobile md:px-margin-desktop py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4 z-10 no-print">
+        {/* Turno + tolerancia (izquierda) */}
+        <div className="flex flex-col gap-1 w-full md:w-auto">
           <label htmlFor="selector-turno" className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
             Turno
           </label>
@@ -308,8 +308,8 @@ export default function EscanerQR() {
           </div>
         </div>
 
-        {/* Reloj y fecha (centro) */}
-        <div className="flex flex-col items-center md:justify-self-center">
+        {/* Reloj y fecha (derecha) */}
+        <div className="flex flex-col items-center md:items-end shrink-0">
           <div className="font-display-lg text-4xl md:text-display-lg text-primary tracking-tight tabular-nums leading-none">
             {relojPartes(reloj).hora}
             <sup className="text-[0.4em] font-bold align-super ml-1 uppercase tracking-wide">
@@ -321,9 +321,6 @@ export default function EscanerQR() {
           </div>
         </div>
 
-        {/* Columna derecha vacía (espaciador) para que el reloj quede centrado
-            en md. La tolerancia ahora va junto al selector de turno. */}
-        <div className="hidden md:block md:justify-self-end" />
       </div>
 
       {/* Layout Split */}

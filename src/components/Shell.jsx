@@ -110,8 +110,47 @@ export default function Shell({ children }) {
         </div>
       </nav>
 
-      {/* TOP NAV (Móvil / Tablet) */}
-      <header className="sticky top-0 z-50 flex justify-between items-center w-full px-margin-mobile lg:hidden h-16 bg-surface border-b border-outline-variant shadow-sm">
+      {/* SIDE RAIL (Tablet 768–1023px). Riel compacto de íconos a la izquierda:
+          reemplaza la barra inferior en tablets para dejar libre la parte de
+          abajo (útil, sobre todo, para la cámara del escáner). */}
+      <nav className="hidden md:flex lg:hidden fixed left-0 top-0 h-screen w-20 z-40 bg-surface-container-low border-r border-outline-variant flex-col items-center py-4">
+        <Logo />
+        <div className="flex-1 w-full flex flex-col items-center gap-1 overflow-y-auto mt-3">
+          {items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              title={item.label}
+              className="w-full flex flex-col items-center gap-1 py-1.5 text-on-surface-variant"
+            >
+              {({ isActive }) => (
+                <>
+                  <span
+                    className={`flex items-center justify-center w-12 h-8 rounded-full transition-colors ${
+                      isActive ? 'bg-primary-container text-on-primary-container' : 'text-on-surface-variant'
+                    }`}
+                  >
+                    <Icon name={item.icon} fill={isActive} className="text-[22px]" />
+                  </span>
+                  <span className={`text-[10px] leading-tight text-center ${isActive ? 'text-on-surface font-bold' : ''}`}>
+                    {item.labelCorto}
+                  </span>
+                </>
+              )}
+            </NavLink>
+          ))}
+        </div>
+        <button
+          onClick={manejarCerrarSesion}
+          title="Cerrar sesión"
+          className="mt-2 p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors shrink-0"
+        >
+          <Icon name="logout" />
+        </button>
+      </nav>
+
+      {/* TOP NAV (solo Móvil <768px) */}
+      <header className="sticky top-0 z-50 flex justify-between items-center w-full px-margin-mobile md:hidden h-16 bg-surface border-b border-outline-variant shadow-sm">
         <div className="flex items-center gap-2 min-w-0">
           <Logo small />
           <span className="font-headline-lg-mobile text-headline-lg-mobile font-bold text-primary truncate">
@@ -122,10 +161,10 @@ export default function Shell({ children }) {
       </header>
 
       {/* MAIN CONTENT */}
-      <main className="flex-1 lg:ml-[280px] w-full pb-24 lg:pb-0 min-h-screen">{children}</main>
+      <main className="flex-1 md:ml-20 lg:ml-[280px] w-full pb-24 md:pb-0 min-h-screen">{children}</main>
 
-      {/* BOTTOM NAV (Móvil / Tablet) */}
-      <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-2 lg:hidden bg-surface border-t border-outline-variant shadow-lg">
+      {/* BOTTOM NAV (solo Móvil <768px) */}
+      <nav className="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 py-2 md:hidden bg-surface border-t border-outline-variant shadow-lg">
         {items.map((item) => (
           <NavLink
             key={item.to}
