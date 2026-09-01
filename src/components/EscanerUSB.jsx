@@ -72,12 +72,26 @@ function Overlay({ resultado, onCerrar }) {
         {estilo.titulo}
       </h2>
       {resultado.nombreCompleto && (
-        <p className="text-white/90 font-title-lg text-title-lg mt-2 text-center px-4">{resultado.nombreCompleto}</p>
+        <p className="text-white font-title-lg text-title-lg mt-2 text-center px-4 font-bold">{resultado.nombreCompleto}</p>
+      )}
+      {(resultado.gradoSeccion || resultado.turnoLabel) && (
+        <div className="flex flex-wrap items-center justify-center gap-2 mt-3 px-4">
+          {resultado.gradoSeccion && (
+            <span className="px-3 py-1 rounded-full bg-white/20 text-white font-body-lg text-body-lg">
+              {resultado.gradoSeccion}
+            </span>
+          )}
+          {resultado.turnoLabel && (
+            <span className="px-3 py-1 rounded-full bg-white/20 text-white font-body-lg text-body-lg">
+              {resultado.turnoLabel}
+            </span>
+          )}
+        </div>
       )}
       {resultado.detalle && (
-        <p className="text-white/80 font-body-lg text-body-lg mt-1 text-center px-4">{resultado.detalle}</p>
+        <p className="text-white/80 font-body-lg text-body-lg mt-3 text-center px-4">{resultado.detalle}</p>
       )}
-      {resultado.hora && <p className="text-white/90 font-body-lg text-body-lg mt-1">{resultado.hora}</p>}
+      {resultado.hora && <p className="text-white/90 font-body-lg text-body-lg mt-2">{resultado.hora}</p>}
       <p className="mt-8 text-white/60 text-xs">Toca la pantalla para continuar</p>
     </div>
   );
@@ -200,7 +214,9 @@ export default function EscanerUSB() {
     if (estudiante.turno !== turno) {
       mostrarResultado({
         tipo: 'TURNO_INCORRECTO',
-        nombreCompleto: `${nombreCompleto} - ${HORARIOS[estudiante.turno].label}`,
+        nombreCompleto,
+        gradoSeccion,
+        turnoLabel: HORARIOS[estudiante.turno].label,
         detalle: 'Por favor, esperar a su horario.',
       });
       agregarAlLog({ tipo: 'TURNO_INCORRECTO', nombre: nombreCompleto, gradoSeccion, hora: ahora.toTimeString().slice(0, 8) });
@@ -221,7 +237,13 @@ export default function EscanerUSB() {
 
     if (errInsert) {
       if (errInsert.code === '23505') {
-        mostrarResultado({ tipo: 'DUPLICADO', nombreCompleto, detalle: 'Ya tiene una marcación registrada hoy.' });
+        mostrarResultado({
+          tipo: 'DUPLICADO',
+          nombreCompleto,
+          gradoSeccion,
+          turnoLabel: HORARIOS[estudiante.turno].label,
+          detalle: 'Ya tiene una marcación registrada hoy.',
+        });
       } else {
         mostrarResultado({ tipo: 'ERROR', nombreCompleto, detalle: errInsert.message });
       }
@@ -230,7 +252,9 @@ export default function EscanerUSB() {
 
     mostrarResultado({
       tipo: estado,
-      nombreCompleto: `${nombreCompleto} - ${gradoSeccion}`,
+      nombreCompleto,
+      gradoSeccion,
+      turnoLabel: HORARIOS[estudiante.turno].label,
       hora: formatearHora(ahora),
     });
     agregarAlLog({ tipo: estado, nombre: nombreCompleto, gradoSeccion, hora: horaIngreso });
