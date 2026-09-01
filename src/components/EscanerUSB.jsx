@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../lib/AuthContext';
+import { useUI } from '../lib/UIContext';
 import {
-  evaluarEstado,
+  estadoMarcacion,
   fechaLocalISO,
   formatearHora,
   formatearHoraDesdeTexto,
@@ -10,6 +11,7 @@ import {
   HORA_MINIMA_ESCANEO,
   HORARIOS,
   ventanaEscaneo,
+  turnoPorHora,
   TURNOS,
 } from '../utils/turnos';
 import Icon from './Icon';
@@ -17,24 +19,28 @@ import { desbloquearAudio, reproducirSonido } from '../utils/sonidos';
 
 // ============================================================================
 // Escáner USB (lector físico tipo "keyboard wedge", p. ej. Advance ADV-6012N).
-// Estos lectores se comportan como un TECLADO: al leer un código lo "escriben"
-// carácter por carácter y terminan con Enter. Por eso aquí NO usamos cámara:
-// basta un campo de texto siempre enfocado que reciba lo tecleado y procese la
-// marcación al presionar Enter. Reusa las mismas reglas de turnos.js que el
-// escáner de cámara (ventana horaria, tolerancia, turno) y guarda en la misma
-// tabla `asistencias`.
+// El lector se comporta como un TECLADO: "escribe" el código y termina con
+// Enter. Aquí NO usamos cámara ni pantallas de color a pantalla completa: el
+// resultado se muestra EN LÍNEA junto al campo, para que sea más rápido y no
+// haya que tocar la pantalla entre lecturas.
+//
+// Optimización de velocidad: se PRECARGAN los alumnos una vez (búsqueda local
+// instantánea), se detectan duplicados localmente y el registro es OPTIMISTA
+// (feedback inmediato + guardado en segundo plano). La restricción UNIQUE de
+// la tabla `asistencias` es el seguro final anti-duplicados.
 // ============================================================================
 
-const DURACION_OVERLAY_MS = 2500;
+const DURACION_RESET_MS = 6000; // el resultado vuelve a "listo" tras unos segundos
 
-const OVERLAY_ESTILOS = {
-  ASISTIO: { bg: 'bg-blue-600/90', icon: 'check_circle', titulo: '¡ASISTIÓ!' },
-  TARDE: { bg: 'bg-red-600/90', icon: 'schedule', titulo: '¡TARDE!' },
-  TURNO_INCORRECTO: { bg: 'bg-amber-600/90', icon: 'warning', titulo: '¡TURNO INCORRECTO!' },
-  FUERA_DE_HORARIO: { bg: 'bg-slate-800/90', icon: 'bedtime', titulo: 'FUERA DE HORARIO' },
-  DUPLICADO: { bg: 'bg-slate-700/90', icon: 'block', titulo: 'YA REGISTRADO HOY' },
-  NO_ENCONTRADO: { bg: 'bg-slate-800/90', icon: 'person_off', titulo: 'NO ENCONTRADO' },
-  ERROR: { bg: 'bg-slate-800/90', icon: 'error', titulo: 'ERROR AL REGISTRAR' },
+// Estilos en línea (no overlay) por tipo de resultado.
+const RESULTADO_ESTILOS = {
+  ASISTIO: { icon: 'check_circle', titulo: 'ASISTIÓ', card: 'bg-blue-50 border-blue-300', txt: 'text-blue-700' },
+  TARDE: { icon: 'schedule', titulo: 'TARDE', card: 'bg-red-50 border-red-300', txt: 'text-red-700' },
+  TURNO_INCORRECTO: { icon: 'warning', titulo: 'TURNO INCORRECTO', card: 'bg-amber-50 border-amber-300', txt: 'text-amber-700' },
+  FUERA_DE_HORARIO: { icon: 'bedtime', titulo: 'FUERA DE HORARIO', card: 'bg-slate-100 border-slate-300', txt: 'text-slate-700' },
+  DUPLICADO: { icon: 'block', titulo: 'YA REGISTRADO HOY', card: 'bg-slate-100 border-slate-300', txt: 'text-slate-700' },
+  NO_ENCONTRADO: { icon: 'person_off', titulo: 'NO ENCONTRADO', card: 'bg-slate-100 border-slate-300', txt: 'text-slate-700' },
+  ERROR: { icon: 'error', titulo: 'ERROR AL REGISTRAR', card: 'bg-slate-100 border-slate-300', txt: 'text-slate-700' },
 };
 
 const LOG_ESTILOS = {
@@ -59,56 +65,63 @@ function relojPartes(date) {
   return { hora: hora.trim(), meridiano };
 }
 
-function Overlay({ resultado, onCerrar }) {
-  if (!resultado) return null;
-  const estilo = OVERLAY_ESTILOS[resultado.tipo];
+// Tarjeta de resultado EN LÍNEA (reemplaza al overlay de pantalla completa).
+function ResultadoInline({ resultado }) {
+  if (!resultado) {
+    return (
+      <div className="w-full max-w-lg rounded-2xl border-2 border-dashed border-outline-variant p-6 flex flex-col items-center text-center text-on-surface-variant">
+        <Icon name="barcode_reader" style={{ fontSize: 48 }} className="text-primary mb-2" />
+        <p className="font-title-md text-title-md text-on-surface">Listo para escanear</p>
+        <p className="font-body-md text-body-md">Apunta el lector al QR del carnet</p>
+      </div>
+    );
+  }
+  const e = RESULTADO_ESTILOS[resultado.tipo] || RESULTADO_ESTILOS.ERROR;
   return (
-    <div
-      className={`feedback-overlay active absolute inset-0 ${estilo.bg} flex flex-col items-center justify-center z-20 cursor-pointer`}
-      onClick={onCerrar}
-    >
-      <Icon name={estilo.icon} className="text-white mb-4" style={{ fontSize: 96 }} fill />
-      <h2 className="text-white font-display-lg text-display-lg font-bold tracking-tight text-center leading-tight px-4">
-        {estilo.titulo}
-      </h2>
+    <div className={`w-full max-w-lg rounded-2xl border-2 ${e.card} p-5 flex flex-col items-center text-center`}>
+      <div className={`flex items-center gap-2 ${e.txt}`}>
+        <Icon name={e.icon} fill className="text-[28px]" />
+        <span className="text-2xl font-bold tracking-tight">{e.titulo}</span>
+      </div>
       {resultado.nombreCompleto && (
-        <p className="text-white font-title-lg text-title-lg mt-2 text-center px-4 font-bold">{resultado.nombreCompleto}</p>
+        <p className="mt-2 font-title-lg text-title-lg text-on-surface font-bold">{resultado.nombreCompleto}</p>
       )}
       {(resultado.gradoSeccion || resultado.turnoLabel) && (
-        <div className="flex flex-wrap items-center justify-center gap-2 mt-3 px-4">
+        <div className="flex flex-wrap justify-center gap-2 mt-2">
           {resultado.gradoSeccion && (
-            <span className="px-3 py-1 rounded-full bg-white/20 text-white font-body-lg text-body-lg">
+            <span className="px-3 py-1 rounded-full bg-surface-container-high text-on-surface font-body-md text-body-md">
               {resultado.gradoSeccion}
             </span>
           )}
           {resultado.turnoLabel && (
-            <span className="px-3 py-1 rounded-full bg-white/20 text-white font-body-lg text-body-lg">
+            <span className="px-3 py-1 rounded-full bg-surface-container-high text-on-surface font-body-md text-body-md">
               {resultado.turnoLabel}
             </span>
           )}
         </div>
       )}
-      {resultado.detalle && (
-        <p className="text-white/80 font-body-lg text-body-lg mt-3 text-center px-4">{resultado.detalle}</p>
-      )}
-      {resultado.hora && <p className="text-white/90 font-body-lg text-body-lg mt-2">{resultado.hora}</p>}
-      <p className="mt-8 text-white/60 text-xs">Toca la pantalla para continuar</p>
+      {resultado.detalle && <p className="mt-2 font-body-md text-body-md text-on-surface-variant">{resultado.detalle}</p>}
+      {resultado.hora && <p className="mt-1 font-body-md text-body-md text-on-surface-variant tabular-nums">{resultado.hora}</p>}
     </div>
   );
 }
 
 export default function EscanerUSB() {
   const { perfil, esAdmin } = useAuth();
-  const [turno, setTurno] = useState(perfil?.turno || TURNOS.MANANA);
+  const { toast } = useUI();
+  const [turno, setTurno] = useState(perfil?.turno || turnoPorHora());
+  const [turnoAuto, setTurnoAuto] = useState(true);
   const [resultado, setResultado] = useState(null);
-  const [procesando, setProcesando] = useState(false);
   const [reloj, setReloj] = useState(new Date());
   const [registros, setRegistros] = useState([]);
   const [codigo, setCodigo] = useState('');
   const [panelAbierto, setPanelAbierto] = useState(false);
+  const [cargandoDatos, setCargandoDatos] = useState(true);
   const inputRef = useRef(null);
   const cierreTimeoutRef = useRef(null);
   const audioListoRef = useRef(false);
+  const estudiantesRef = useRef(new Map()); // dni -> estudiante (caché en memoria)
+  const marcadosHoyRef = useRef(new Set()); // estudiante_id ya marcado hoy
 
   useEffect(() => {
     if (perfil?.turno && !esAdmin) setTurno(perfil.turno);
@@ -119,48 +132,66 @@ export default function EscanerUSB() {
     return () => clearInterval(t);
   }, []);
 
+  // Turno automático por hora (solo admin y mientras no lo haya cambiado a mano).
   useEffect(() => {
-    cargarRegistrosHoy();
+    if (!esAdmin || !turnoAuto) return;
+    const t = turnoPorHora(reloj);
+    setTurno((prev) => (prev === t ? prev : t));
+  }, [esAdmin, turnoAuto, reloj]);
+
+  useEffect(() => {
+    cargarDatos();
   }, []);
 
-  // Mantener el campo enfocado para que el lector USB siempre "escriba" aquí.
-  // Se reenfoca al montar, al cerrar el overlay y al volver a la pestaña.
+  // Mantener el campo enfocado para que el lector siempre "escriba" aquí.
   useEffect(() => {
-    if (!resultado && !panelAbierto) inputRef.current?.focus();
-  }, [resultado, panelAbierto]);
+    if (!panelAbierto) inputRef.current?.focus();
+  }, [panelAbierto]);
 
   useEffect(() => {
     const reenfocar = () => {
-      if (!resultado && !panelAbierto) inputRef.current?.focus();
+      if (!panelAbierto) inputRef.current?.focus();
     };
     window.addEventListener('focus', reenfocar);
     return () => window.removeEventListener('focus', reenfocar);
-  }, [resultado, panelAbierto]);
+  }, [panelAbierto]);
 
-  async function cargarRegistrosHoy() {
-    const hoy = fechaLocalISO();
-    const { data } = await supabase
-      .from('asistencias')
-      .select('id, hora_ingreso, estado, estudiantes(nombres, apellidos, grado, seccion)')
-      .eq('fecha', hoy)
-      .order('hora_ingreso', { ascending: false })
-      .limit(50);
-    if (data) {
-      setRegistros(
-        data.map((r) => ({
-          id: r.id,
-          tipo: r.estado,
-          nombre: `${r.estudiantes?.nombres || ''} ${r.estudiantes?.apellidos || ''}`.trim(),
-          gradoSeccion: `${r.estudiantes?.grado || ''} "${r.estudiantes?.seccion || ''}"`,
-          hora: r.hora_ingreso,
-        }))
-      );
-    }
+  // Precarga: todos los alumnos activos (para búsqueda local instantánea) y las
+  // marcaciones de hoy (para el registro reciente y el chequeo de duplicados).
+  async function cargarDatos() {
+    setCargandoDatos(true);
+    const [resEst, resAsis] = await Promise.all([
+      supabase.from('estudiantes').select('*').eq('activo', true),
+      supabase
+        .from('asistencias')
+        .select('id, estudiante_id, hora_ingreso, estado, estudiantes(nombres, apellidos, grado, seccion)')
+        .eq('fecha', fechaLocalISO())
+        .order('hora_ingreso', { ascending: false })
+        .limit(200),
+    ]);
+
+    const mapa = new Map();
+    (resEst.data || []).forEach((e) => mapa.set(String(e.dni), e));
+    estudiantesRef.current = mapa;
+
+    const set = new Set();
+    (resAsis.data || []).forEach((r) => r.estudiante_id && set.add(r.estudiante_id));
+    marcadosHoyRef.current = set;
+
+    setRegistros(
+      (resAsis.data || []).map((r) => ({
+        id: r.id,
+        tipo: r.estado,
+        nombre: `${r.estudiantes?.nombres || ''} ${r.estudiantes?.apellidos || ''}`.trim(),
+        gradoSeccion: `${r.estudiantes?.grado || ''} "${r.estudiantes?.seccion || ''}"`,
+        hora: r.hora_ingreso,
+      }))
+    );
+    setCargandoDatos(false);
   }
 
-  // El navegador solo deja sonar el audio tras un gesto del usuario. Las
-  // pulsaciones del lector USB cuentan como gesto, así que desbloqueamos el
-  // audio la primera vez que llega una tecla o un clic.
+  // El navegador solo deja sonar el audio tras un gesto del usuario; las teclas
+  // del lector cuentan como gesto.
   function asegurarAudio() {
     if (audioListoRef.current) return;
     audioListoRef.current = true;
@@ -171,21 +202,15 @@ export default function EscanerUSB() {
     e.preventDefault();
     const valor = codigo.trim();
     setCodigo('');
-    if (!valor || procesando) return;
+    if (!valor || cargandoDatos) return;
     procesar(valor);
-  }
-
-  async function procesar(dni) {
-    setProcesando(true);
-    await registrarMarcacion(dni);
-    setProcesando(false);
     inputRef.current?.focus();
   }
 
-  async function registrarMarcacion(dni) {
+  async function procesar(dni) {
     const ahora = new Date();
 
-    // Compuerta horaria global: fuera del horario de atención no se registra.
+    // 1. Ventana horaria global.
     const ventana = ventanaEscaneo(ahora);
     if (ventana !== 'OK') {
       const detalle =
@@ -196,14 +221,21 @@ export default function EscanerUSB() {
       return;
     }
 
-    const { data: estudiante, error: errBusqueda } = await supabase
-      .from('estudiantes')
-      .select('*')
-      .eq('dni', dni)
-      .eq('activo', true)
-      .maybeSingle();
-
-    if (errBusqueda || !estudiante) {
+    // 2. Búsqueda local; si no está en caché (alumno nuevo), consulta en vivo.
+    let estudiante = estudiantesRef.current.get(String(dni));
+    if (!estudiante) {
+      const { data } = await supabase
+        .from('estudiantes')
+        .select('*')
+        .eq('dni', dni)
+        .eq('activo', true)
+        .maybeSingle();
+      if (data) {
+        estudiante = data;
+        estudiantesRef.current.set(String(data.dni), data);
+      }
+    }
+    if (!estudiante) {
       mostrarResultado({ tipo: 'NO_ENCONTRADO', detalle: `Código leído: ${dni}` });
       return;
     }
@@ -211,6 +243,7 @@ export default function EscanerUSB() {
     const nombreCompleto = `${estudiante.nombres} ${estudiante.apellidos}`;
     const gradoSeccion = `${estudiante.grado} "${estudiante.seccion}"`;
 
+    // 3. Turno correcto.
     if (estudiante.turno !== turno) {
       mostrarResultado({
         tipo: 'TURNO_INCORRECTO',
@@ -219,37 +252,39 @@ export default function EscanerUSB() {
         turnoLabel: HORARIOS[estudiante.turno].label,
         detalle: 'Por favor, esperar a su horario.',
       });
-      agregarAlLog({ tipo: 'TURNO_INCORRECTO', nombre: nombreCompleto, gradoSeccion, hora: ahora.toTimeString().slice(0, 8) });
       return;
     }
 
-    const estado = evaluarEstado(turno, ahora);
+    // 4. Estado según horario del turno (con límite superior en la salida).
+    const estado = estadoMarcacion(turno, ahora);
+    if (estado === 'FUERA_DE_TURNO') {
+      mostrarResultado({
+        tipo: 'FUERA_DE_HORARIO',
+        nombreCompleto,
+        gradoSeccion,
+        turnoLabel: HORARIOS[turno].label,
+        detalle: `El ${HORARIOS[turno].label.toLowerCase()} ya cerró (salida ${formatearHoraDesdeTexto(HORARIOS[turno].salida)}).`,
+      });
+      return;
+    }
+
+    // 5. Duplicado (chequeo local instantáneo).
+    if (marcadosHoyRef.current.has(estudiante.id)) {
+      mostrarResultado({
+        tipo: 'DUPLICADO',
+        nombreCompleto,
+        gradoSeccion,
+        turnoLabel: HORARIOS[estudiante.turno].label,
+        detalle: 'Ya tiene una marcación registrada hoy.',
+      });
+      return;
+    }
+
+    // 6. Registro OPTIMISTA: feedback inmediato y guardado en segundo plano.
     const fecha = fechaLocalISO(ahora);
     const horaIngreso = ahora.toTimeString().slice(0, 8);
-
-    const { error: errInsert } = await supabase.from('asistencias').insert({
-      estudiante_id: estudiante.id,
-      fecha,
-      hora_ingreso: horaIngreso,
-      estado,
-      registrado_por: perfil?.id,
-    });
-
-    if (errInsert) {
-      if (errInsert.code === '23505') {
-        mostrarResultado({
-          tipo: 'DUPLICADO',
-          nombreCompleto,
-          gradoSeccion,
-          turnoLabel: HORARIOS[estudiante.turno].label,
-          detalle: 'Ya tiene una marcación registrada hoy.',
-        });
-      } else {
-        mostrarResultado({ tipo: 'ERROR', nombreCompleto, detalle: errInsert.message });
-      }
-      return;
-    }
-
+    const logId = `local-${Date.now()}`;
+    marcadosHoyRef.current.add(estudiante.id);
     mostrarResultado({
       tipo: estado,
       nombreCompleto,
@@ -257,23 +292,45 @@ export default function EscanerUSB() {
       turnoLabel: HORARIOS[estudiante.turno].label,
       hora: formatearHora(ahora),
     });
-    agregarAlLog({ tipo: estado, nombre: nombreCompleto, gradoSeccion, hora: horaIngreso });
+    agregarAlLog({ id: logId, tipo: estado, nombre: nombreCompleto, gradoSeccion, hora: horaIngreso });
+
+    supabase
+      .from('asistencias')
+      .insert({ estudiante_id: estudiante.id, fecha, hora_ingreso: horaIngreso, estado, registrado_por: perfil?.id })
+      .then(({ error }) => {
+        if (!error) return;
+        if (error.code === '23505') {
+          // Otro dispositivo ya lo registró: corrige el mensaje (sigue marcado).
+          mostrarResultado({
+            tipo: 'DUPLICADO',
+            nombreCompleto,
+            gradoSeccion,
+            turnoLabel: HORARIOS[estudiante.turno].label,
+            detalle: 'Ya tenía una marcación registrada hoy.',
+          });
+        } else {
+          // Error de red: revertir para permitir reintentar.
+          marcadosHoyRef.current.delete(estudiante.id);
+          setRegistros((prev) => prev.filter((r) => r.id !== logId));
+          mostrarResultado({
+            tipo: 'ERROR',
+            nombreCompleto,
+            detalle: 'No se pudo guardar (revisa el internet). Vuelve a escanear.',
+          });
+          toast('Error de red al registrar', 'error');
+        }
+      });
   }
 
   function agregarAlLog(item) {
-    setRegistros((prev) => [{ id: `${Date.now()}`, ...item }, ...prev].slice(0, 50));
+    setRegistros((prev) => [item, ...prev].slice(0, 50));
   }
 
   function mostrarResultado(res) {
     setResultado(res);
     reproducirSonido(res.tipo);
-    cierreTimeoutRef.current = setTimeout(() => cerrarOverlay(), DURACION_OVERLAY_MS);
-  }
-
-  function cerrarOverlay() {
     clearTimeout(cierreTimeoutRef.current);
-    setResultado(null);
-    inputRef.current?.focus();
+    cierreTimeoutRef.current = setTimeout(() => setResultado(null), DURACION_RESET_MS);
   }
 
   const horario = HORARIOS[turno];
@@ -287,7 +344,7 @@ export default function EscanerUSB() {
           <label htmlFor="selector-turno-usb" className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
             Turno
           </label>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="relative w-full md:w-40">
               <Icon
                 name={turno === TURNOS.MANANA ? 'wb_sunny' : 'wb_twilight'}
@@ -296,7 +353,10 @@ export default function EscanerUSB() {
               <select
                 id="selector-turno-usb"
                 value={turno}
-                onChange={(e) => setTurno(e.target.value)}
+                onChange={(e) => {
+                  setTurno(e.target.value);
+                  setTurnoAuto(false);
+                }}
                 disabled={!esAdmin && !!perfil?.turno}
                 className="appearance-none w-full h-9 pl-8 pr-7 font-label-md text-label-md rounded-lg bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
               >
@@ -308,6 +368,20 @@ export default function EscanerUSB() {
                 className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]"
               />
             </div>
+            {esAdmin && (
+              <button
+                onClick={() => setTurnoAuto((v) => !v)}
+                title={turnoAuto ? 'Turno automático por hora (activado)' : 'Volver a turno automático por hora'}
+                className={`flex items-center gap-1 shrink-0 h-9 px-2.5 rounded-lg border font-label-md text-label-md transition-colors ${
+                  turnoAuto
+                    ? 'bg-primary text-on-primary border-primary'
+                    : 'bg-surface-container-lowest text-on-surface-variant border-outline-variant hover:bg-surface-container-high'
+                }`}
+              >
+                <Icon name="schedule" className="text-[16px]" />
+                Auto
+              </button>
+            )}
             <span
               title="Tolerancia: hora límite para marcar como ASISTIÓ"
               className="flex items-center gap-1 shrink-0 h-9 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-2.5 font-label-md text-label-md whitespace-nowrap tabular-nums"
@@ -349,23 +423,11 @@ export default function EscanerUSB() {
         </div>
       </div>
 
-      {/* Zona central: campo de captura del lector USB */}
-      <div className="flex-1 flex items-center justify-center overflow-hidden relative p-6">
-        <form onSubmit={manejarSubmit} className="w-full max-w-lg flex flex-col items-center text-center gap-6">
-          <div className={`flex items-center justify-center w-24 h-24 rounded-full ${procesando ? 'bg-primary/20' : 'bg-primary-container'} transition-colors`}>
-            <Icon name="barcode_reader" className="text-primary" style={{ fontSize: 56 }} />
-          </div>
+      {/* Zona central: resultado en línea + campo de captura del lector USB */}
+      <div className="flex-1 flex flex-col items-center justify-center overflow-auto relative p-6 gap-5">
+        <ResultadoInline resultado={resultado} />
 
-          <div>
-            <h2 className="font-headline-lg-mobile md:font-headline-lg text-headline-lg-mobile md:text-headline-lg text-on-surface">
-              Escáner USB
-            </h2>
-            <p className="font-body-md text-body-md text-on-surface-variant mt-1">
-              Apunta el lector al QR del carnet. El código se registra automáticamente.
-              También puedes escribir el DNI/código y presionar Enter.
-            </p>
-          </div>
-
+        <form onSubmit={manejarSubmit} className="w-full max-w-lg flex flex-col items-center text-center gap-4">
           <input
             ref={inputRef}
             value={codigo}
@@ -375,26 +437,25 @@ export default function EscanerUSB() {
             inputMode="numeric"
             autoComplete="off"
             autoFocus
-            placeholder="Esperando lectura…"
-            className="w-full text-center text-2xl md:text-3xl tracking-widest tabular-nums py-4 px-4 rounded-2xl bg-surface-container-lowest text-on-surface border-2 border-outline-variant focus:outline-none focus-visible:border-primary transition-colors"
+            disabled={cargandoDatos}
+            placeholder={cargandoDatos ? 'Cargando alumnos…' : 'Esperando lectura…'}
+            className="w-full text-center text-2xl md:text-3xl tracking-widest tabular-nums py-4 px-4 rounded-2xl bg-surface-container-lowest text-on-surface border-2 border-outline-variant focus:outline-none focus-visible:border-primary transition-colors disabled:opacity-60"
           />
 
           <div className="flex items-center gap-2 text-on-surface-variant font-label-md text-label-md">
-            <span className={`w-2.5 h-2.5 rounded-full ${procesando ? 'bg-amber-500' : 'bg-green-500 animate-pulse'}`} />
-            {procesando ? 'Registrando…' : 'Listo para escanear'}
+            <span className={`w-2.5 h-2.5 rounded-full ${cargandoDatos ? 'bg-amber-500' : 'bg-green-500 animate-pulse'}`} />
+            {cargandoDatos ? 'Preparando…' : 'Listo para escanear'}
           </div>
 
           <button
             type="submit"
-            disabled={!codigo.trim() || procesando}
+            disabled={!codigo.trim() || cargandoDatos}
             className="flex items-center gap-2 px-6 py-2.5 rounded-full bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors disabled:opacity-50"
           >
             <Icon name="check_circle" className="text-[20px]" />
             Registrar
           </button>
         </form>
-
-        <Overlay resultado={resultado} onCerrar={cerrarOverlay} />
       </div>
 
       {/* Cajón lateral de "Registro Reciente" */}

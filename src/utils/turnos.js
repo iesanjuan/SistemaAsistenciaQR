@@ -49,6 +49,14 @@ export function ventanaEscaneo(fecha = new Date()) {
   return 'OK';
 }
 
+// Sugiere el turno según la hora del día, para preseleccionarlo solo en el
+// escáner y no tener que elegirlo a mano. Corte al mediodía: antes del inicio
+// del turno tarde (12:30) -> MAÑANA; de ahí en adelante -> TARDE.
+export function turnoPorHora(fecha = new Date()) {
+  const minutosAhora = fecha.getHours() * 60 + fecha.getMinutes();
+  return minutosAhora < hhmmAMinutos(HORARIOS.TARDE.ingresoInicio) ? TURNOS.MANANA : TURNOS.TARDE;
+}
+
 // Mapea una sección (A-H) a su turno correspondiente.
 export function seccionATurno(seccion) {
   const s = String(seccion || '').trim().toUpperCase();
@@ -109,6 +117,24 @@ export function evaluarEstado(turno, horaMarcacion = new Date()) {
 
   const limite = horaHoyComoDate(horario.tolerancia, horaMarcacion);
   return horaMarcacion <= limite ? 'ASISTIO' : 'TARDE';
+}
+
+// Evalúa la marcación considerando el horario COMPLETO del turno, con límite
+// superior en la hora de SALIDA. Devuelve:
+//   'ASISTIO'        -> llega hasta la tolerancia (incluye llegadas temprano).
+//   'TARDE'          -> llega después de la tolerancia pero antes de la salida.
+//   'FUERA_DE_TURNO' -> llega después de la salida del turno: el turno ya cerró
+//                       y NO debe contar como tarde (p. ej. un alumno de mañana
+//                       escaneado en la tarde).
+export function estadoMarcacion(turno, horaMarcacion = new Date()) {
+  const horario = HORARIOS[turno];
+  if (!horario) throw new Error(`Turno inválido: ${turno}`);
+
+  const salida = horaHoyComoDate(horario.salida, horaMarcacion);
+  if (horaMarcacion > salida) return 'FUERA_DE_TURNO';
+
+  const tolerancia = horaHoyComoDate(horario.tolerancia, horaMarcacion);
+  return horaMarcacion <= tolerancia ? 'ASISTIO' : 'TARDE';
 }
 
 // Fecha "YYYY-MM-DD" en hora LOCAL (no UTC). Usar esto en vez de

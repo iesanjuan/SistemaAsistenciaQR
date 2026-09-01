@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../lib/AuthContext';
+import { useUI } from '../lib/UIContext';
 import {
-  evaluarEstado,
+  estadoMarcacion,
   fechaLocalISO,
   formatearHora,
   formatearHoraDesdeTexto,
@@ -11,6 +12,7 @@ import {
   HORA_MINIMA_ESCANEO,
   HORARIOS,
   ventanaEscaneo,
+  turnoPorHora,
   TURNOS,
 } from '../utils/turnos';
 import Icon from './Icon';
@@ -79,7 +81,11 @@ function Overlay({ resultado, onCerrar }) {
 
 export default function EscanerQR() {
   const { perfil, esAdmin } = useAuth();
-  const [turno, setTurno] = useState(perfil?.turno || TURNOS.MANANA);
+  const { toast } = useUI();
+  const [turno, setTurno] = useState(perfil?.turno || turnoPorHora());
+  // El admin puede escanear cualquier turno; por defecto sigue la HORA (auto).
+  // Si cambia el selector a mano, se desactiva el automático.
+  const [turnoAuto, setTurnoAuto] = useState(true);
   const [escaneando, setEscaneando] = useState(false);
   const [resultado, setResultado] = useState(null);
   const [procesando, setProcesando] = useState(false);
@@ -88,6 +94,8 @@ export default function EscanerQR() {
   const [panelAbierto, setPanelAbierto] = useState(false);
   const scannerRef = useRef(null);
   const cierreTimeoutRef = useRef(null);
+  const estudiantesRef = useRef(new Map()); // dni -> estudiante (caché en memoria)
+  const marcadosHoyRef = useRef(new Set()); // estudiante_id ya marcado hoy
 
   useEffect(() => {
     if (perfil?.turno && !esAdmin) setTurno(perfil.turno);
@@ -98,31 +106,50 @@ export default function EscanerQR() {
     return () => clearInterval(t);
   }, []);
 
+  // Turno automático por hora (solo admin, mientras no lo cambie a mano y no
+  // esté escaneando, para no cambiar el turno en medio de una captura).
   useEffect(() => {
-    cargarRegistrosHoy();
+    if (!esAdmin || !turnoAuto || escaneando) return;
+    const t = turnoPorHora(reloj);
+    setTurno((prev) => (prev === t ? prev : t));
+  }, [esAdmin, turnoAuto, escaneando, reloj]);
+
+  useEffect(() => {
+    cargarDatos();
     return () => detenerCamara();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function cargarRegistrosHoy() {
-    const hoy = fechaLocalISO();
-    const { data } = await supabase
-      .from('asistencias')
-      .select('id, hora_ingreso, estado, estudiantes(nombres, apellidos, grado, seccion)')
-      .eq('fecha', hoy)
-      .order('hora_ingreso', { ascending: false })
-      .limit(50);
-    if (data) {
-      setRegistros(
-        data.map((r) => ({
-          id: r.id,
-          tipo: r.estado,
-          nombre: `${r.estudiantes?.nombres || ''} ${r.estudiantes?.apellidos || ''}`.trim(),
-          gradoSeccion: `${r.estudiantes?.grado || ''} "${r.estudiantes?.seccion || ''}"`,
-          hora: r.hora_ingreso,
-        }))
-      );
-    }
+  // Precarga: todos los alumnos activos (para búsqueda local instantánea) y las
+  // marcaciones de hoy (registro reciente + chequeo de duplicados local).
+  async function cargarDatos() {
+    const [resEst, resAsis] = await Promise.all([
+      supabase.from('estudiantes').select('*').eq('activo', true),
+      supabase
+        .from('asistencias')
+        .select('id, estudiante_id, hora_ingreso, estado, estudiantes(nombres, apellidos, grado, seccion)')
+        .eq('fecha', fechaLocalISO())
+        .order('hora_ingreso', { ascending: false })
+        .limit(200),
+    ]);
+
+    const mapa = new Map();
+    (resEst.data || []).forEach((e) => mapa.set(String(e.dni), e));
+    estudiantesRef.current = mapa;
+
+    const set = new Set();
+    (resAsis.data || []).forEach((r) => r.estudiante_id && set.add(r.estudiante_id));
+    marcadosHoyRef.current = set;
+
+    setRegistros(
+      (resAsis.data || []).map((r) => ({
+        id: r.id,
+        tipo: r.estado,
+        nombre: `${r.estudiantes?.nombres || ''} ${r.estudiantes?.apellidos || ''}`.trim(),
+        gradoSeccion: `${r.estudiantes?.grado || ''} "${r.estudiantes?.seccion || ''}"`,
+        hora: r.hora_ingreso,
+      }))
+    );
   }
 
   async function iniciarCamara() {
@@ -189,14 +216,21 @@ export default function EscanerQR() {
       return;
     }
 
-    const { data: estudiante, error: errBusqueda } = await supabase
-      .from('estudiantes')
-      .select('*')
-      .eq('dni', dni)
-      .eq('activo', true)
-      .maybeSingle();
-
-    if (errBusqueda || !estudiante) {
+    // Búsqueda local (instantánea); si no está en caché (alumno nuevo), va en vivo.
+    let estudiante = estudiantesRef.current.get(String(dni));
+    if (!estudiante) {
+      const { data } = await supabase
+        .from('estudiantes')
+        .select('*')
+        .eq('dni', dni)
+        .eq('activo', true)
+        .maybeSingle();
+      if (data) {
+        estudiante = data;
+        estudiantesRef.current.set(String(data.dni), data);
+      }
+    }
+    if (!estudiante) {
       mostrarResultado({ tipo: 'NO_ENCONTRADO', detalle: `DNI escaneado: ${dni}` });
       return;
     }
@@ -214,33 +248,50 @@ export default function EscanerQR() {
       return;
     }
 
-    const estado = evaluarEstado(turno, ahora);
-    const fecha = fechaLocalISO(ahora);
-    const horaIngreso = ahora.toTimeString().slice(0, 8);
-
-    const { error: errInsert } = await supabase.from('asistencias').insert({
-      estudiante_id: estudiante.id,
-      fecha,
-      hora_ingreso: horaIngreso,
-      estado,
-      registrado_por: perfil?.id,
-    });
-
-    if (errInsert) {
-      if (errInsert.code === '23505') {
-        mostrarResultado({ tipo: 'DUPLICADO', nombreCompleto, detalle: 'Ya tiene una marcación registrada hoy.' });
-      } else {
-        mostrarResultado({ tipo: 'ERROR', nombreCompleto, detalle: errInsert.message });
-      }
+    const estado = estadoMarcacion(turno, ahora);
+    // El turno ya cerró (después de la hora de salida): no cuenta como tarde.
+    if (estado === 'FUERA_DE_TURNO') {
+      mostrarResultado({
+        tipo: 'FUERA_DE_HORARIO',
+        nombreCompleto,
+        detalle: `El ${HORARIOS[turno].label.toLowerCase()} ya cerró (salida ${formatearHoraDesdeTexto(HORARIOS[turno].salida)}).`,
+      });
       return;
     }
 
+    // Duplicado: chequeo local instantáneo.
+    if (marcadosHoyRef.current.has(estudiante.id)) {
+      mostrarResultado({ tipo: 'DUPLICADO', nombreCompleto, detalle: 'Ya tiene una marcación registrada hoy.' });
+      return;
+    }
+
+    // Registro OPTIMISTA: feedback inmediato y guardado en segundo plano.
+    const fecha = fechaLocalISO(ahora);
+    const horaIngreso = ahora.toTimeString().slice(0, 8);
+    const logId = `local-${Date.now()}`;
+    marcadosHoyRef.current.add(estudiante.id);
     mostrarResultado({
       tipo: estado,
       nombreCompleto: `${nombreCompleto} - ${gradoSeccion}`,
       hora: formatearHora(ahora),
     });
-    agregarAlLog({ tipo: estado, nombre: nombreCompleto, gradoSeccion, hora: horaIngreso });
+    agregarAlLog({ id: logId, tipo: estado, nombre: nombreCompleto, gradoSeccion, hora: horaIngreso });
+
+    supabase
+      .from('asistencias')
+      .insert({ estudiante_id: estudiante.id, fecha, hora_ingreso: horaIngreso, estado, registrado_por: perfil?.id })
+      .then(({ error: errInsert }) => {
+        if (!errInsert) return;
+        if (errInsert.code === '23505') {
+          mostrarResultado({ tipo: 'DUPLICADO', nombreCompleto, detalle: 'Ya tenía una marcación registrada hoy.' });
+        } else {
+          // Error de red: revertir para permitir reintentar.
+          marcadosHoyRef.current.delete(estudiante.id);
+          setRegistros((prev) => prev.filter((r) => r.id !== logId));
+          mostrarResultado({ tipo: 'ERROR', nombreCompleto, detalle: 'No se pudo guardar (revisa el internet).' });
+          toast('Error de red al registrar', 'error');
+        }
+      });
   }
 
   function agregarAlLog(item) {
@@ -277,7 +328,7 @@ export default function EscanerQR() {
           <label htmlFor="selector-turno" className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
             Turno
           </label>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <div className="relative w-full md:w-40">
               <Icon
                 name={turno === TURNOS.MANANA ? 'wb_sunny' : 'wb_twilight'}
@@ -286,7 +337,10 @@ export default function EscanerQR() {
               <select
                 id="selector-turno"
                 value={turno}
-                onChange={(e) => setTurno(e.target.value)}
+                onChange={(e) => {
+                  setTurno(e.target.value);
+                  setTurnoAuto(false);
+                }}
                 disabled={escaneando || (!esAdmin && !!perfil?.turno)}
                 className="appearance-none w-full h-9 pl-8 pr-7 font-label-md text-label-md rounded-lg bg-surface-container-lowest text-on-surface border border-outline-variant focus:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-60 disabled:cursor-not-allowed"
               >
@@ -298,6 +352,22 @@ export default function EscanerQR() {
                 className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-on-surface-variant text-[16px]"
               />
             </div>
+            {/* Toggle de turno automático por hora (solo admin). */}
+            {esAdmin && (
+              <button
+                onClick={() => setTurnoAuto((v) => !v)}
+                disabled={escaneando}
+                title={turnoAuto ? 'Turno automático por hora (activado)' : 'Volver a turno automático por hora'}
+                className={`flex items-center gap-1 shrink-0 h-9 px-2.5 rounded-lg border font-label-md text-label-md transition-colors disabled:opacity-60 ${
+                  turnoAuto
+                    ? 'bg-primary text-on-primary border-primary'
+                    : 'bg-surface-container-lowest text-on-surface-variant border-outline-variant hover:bg-surface-container-high'
+                }`}
+              >
+                <Icon name="schedule" className="text-[16px]" />
+                Auto
+              </button>
+            )}
             {/* Tolerancia: chip compacto al costado del selector de turno. */}
             <span
               title="Tolerancia: hora límite para marcar como ASISTIÓ"
