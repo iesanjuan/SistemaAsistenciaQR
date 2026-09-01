@@ -117,6 +117,15 @@ export default function EscanerUSB() {
   const [codigo, setCodigo] = useState('');
   const [panelAbierto, setPanelAbierto] = useState(false);
   const [cargandoDatos, setCargandoDatos] = useState(true);
+  // Header plegable: en tablet permite ocultar los controles para dejar la
+  // pantalla de escaneo más amplia y limpia. Se recuerda la preferencia.
+  const [headerAbierto, setHeaderAbierto] = useState(() => {
+    try {
+      return localStorage.getItem('escaner-controles') !== 'oculto';
+    } catch {
+      return true;
+    }
+  });
   const inputRef = useRef(null);
   const cierreTimeoutRef = useRef(null);
   const audioListoRef = useRef(false);
@@ -131,6 +140,14 @@ export default function EscanerUSB() {
     const t = setInterval(() => setReloj(new Date()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('escaner-controles', headerAbierto ? 'visible' : 'oculto');
+    } catch {
+      /* noop */
+    }
+  }, [headerAbierto]);
 
   // Turno automático por hora (solo admin y mientras no lo haya cambiado a mano).
   useEffect(() => {
@@ -337,8 +354,11 @@ export default function EscanerUSB() {
 
   return (
     <div className="flex-1 bg-background flex flex-col h-[calc(100dvh-64px-72px)] md:h-screen relative">
-      {/* Control Header: turno + tolerancia (izq) · reloj (centro) · registros (der) */}
-      <div className="bg-surface shadow-sm border-b border-outline-variant px-margin-mobile md:px-margin-desktop py-4 flex flex-col md:flex-row md:items-center gap-3 z-10 no-print">
+      {/* Control Header plegable: turno · reloj · registros. Se puede ocultar
+          para dejar la pantalla de escaneo amplia y limpia (útil en tablet). */}
+      <div className="bg-surface shadow-sm border-b border-outline-variant z-10 no-print">
+       {headerAbierto && (
+        <div className="px-margin-mobile md:px-margin-desktop py-4 flex flex-col md:flex-row md:items-center gap-3">
         {/* Turno + tolerancia (izquierda) */}
         <div className="flex flex-col gap-1 w-full md:w-auto md:flex-1 md:min-w-0">
           <label htmlFor="selector-turno-usb" className="text-on-surface-variant font-label-md text-label-md uppercase tracking-wider">
@@ -421,6 +441,19 @@ export default function EscanerUSB() {
             )}
           </button>
         </div>
+
+        </div>
+       )}
+
+        {/* Barra para plegar/desplegar los controles. */}
+        <button
+          onClick={() => setHeaderAbierto((v) => !v)}
+          title={headerAbierto ? 'Ocultar controles' : 'Mostrar controles'}
+          className="w-full flex items-center justify-center gap-1 py-1 text-on-surface-variant hover:bg-surface-container-high transition-colors"
+        >
+          <Icon name={headerAbierto ? 'expand_less' : 'expand_more'} className="text-[18px]" />
+          <span className="font-label-md text-label-md">{headerAbierto ? 'Ocultar controles' : 'Mostrar controles'}</span>
+        </button>
       </div>
 
       {/* Zona central: resultado en línea + campo de captura del lector USB */}
