@@ -8,6 +8,7 @@ const ITEMS = [
   { to: '/importar', label: 'Importar Excel', labelCorto: 'Importar', icon: 'upload_file', soloAdmin: true },
   { to: '/carnets', label: 'Generar QR', labelCorto: 'QR', icon: 'qr_code_2', soloAdmin: true },
   { to: '/escaner', label: 'Escáner de Asistencia', labelCorto: 'Escáner', icon: 'qr_code_scanner', soloAdmin: false },
+  { to: '/escaner-usb', label: 'Escáner USB (lector físico)', labelCorto: 'USB', icon: 'barcode_reader', soloAdmin: false },
   { to: '/reportes', label: 'Reportes', labelCorto: 'Reportes', icon: 'analytics', soloAdmin: true },
   { to: '/usuarios', label: 'Gestión de Usuarios', labelCorto: 'Usuarios', icon: 'manage_accounts', soloAdmin: true },
   { to: '/dias-no-lectivos', label: 'Días no lectivos', labelCorto: 'Feriados', icon: 'event_busy', soloAdmin: true },

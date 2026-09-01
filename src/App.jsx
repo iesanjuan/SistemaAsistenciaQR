@@ -4,6 +4,7 @@ import Login from './pages/Login';
 import ImportarExcel from './components/ImportarExcel';
 import CarnetsQR from './components/CarnetsQR';
 import EscanerQR from './components/EscanerQR';
+import EscanerUSB from './components/EscanerUSB';
 import ReportesAuxiliar from './components/ReportesAuxiliar';
 import GestionUsuarios from './components/GestionUsuarios';
 import DiasNoLectivos from './components/DiasNoLectivos';
@@ -48,6 +49,7 @@ export default function App() {
       <Route path="/login" element={session ? <Navigate to="/escaner" replace /> : <Login />} />
       <Route element={<ShellLayout />}>
         <Route path="/escaner" element={<EscanerQR />} />
+        <Route path="/escaner-usb" element={<EscanerUSB />} />
         <Route path="/perfil" element={<Perfil />} />
         <Route
           path="/reportes"
