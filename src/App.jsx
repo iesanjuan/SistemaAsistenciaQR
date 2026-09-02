@@ -51,14 +51,9 @@ export default function App() {
         <Route path="/escaner" element={<EscanerQR />} />
         <Route path="/escaner-usb" element={<EscanerUSB />} />
         <Route path="/perfil" element={<Perfil />} />
-        <Route
-          path="/reportes"
-          element={
-            <RutaAdmin>
-              <ReportesAuxiliar />
-            </RutaAdmin>
-          }
-        />
+        {/* Reportes: disponible para auxiliares (limitado a su jurisdicción por
+            RLS) y para admin (ve todo). */}
+        <Route path="/reportes" element={<ReportesAuxiliar />} />
         <Route
           path="/importar"
           element={

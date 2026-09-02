@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../lib/AuthContext';
 import { useUI } from '../lib/UIContext';
-import { claveGradoSeccion, fechaLocalISO, gradoNumero, HORARIOS } from '../utils/turnos';
+import { claveGradoSeccion, fechaLocalISO, formatearHoraDesdeTexto, gradoNumero, HORARIOS } from '../utils/turnos';
 import Icon from './Icon';
 import Cargador from './Cargador';
 
@@ -69,6 +69,7 @@ export default function ReportesAuxiliar() {
   const [filas, setFilas] = useState([]);
   const [auxiliares, setAuxiliares] = useState([]);
   const [tardanzasRaw, setTardanzasRaw] = useState([]);
+  const [marcaciones, setMarcaciones] = useState([]); // marcaciones reales (con hora)
   const [cargando, setCargando] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   // Modal de detalle: null | 'asistieron' | 'tardanzas' | 'faltones'. Muestra
@@ -76,6 +77,12 @@ export default function ReportesAuxiliar() {
   const [detalle, setDetalle] = useState(null);
   // Filtro de grado+sección DENTRO del modal ('' = todas).
   const [detalleFiltro, setDetalleFiltro] = useState('');
+  // Justificaciones (anotaciones de tardanza/falta) del rango.
+  const [justificaciones, setJustificaciones] = useState([]);
+  // Diálogo de justificación: null | { estudiante_id, nombre, fecha, tipo }.
+  const [justificando, setJustificando] = useState(null);
+  const [motivoInput, setMotivoInput] = useState('');
+  const [guardandoJust, setGuardandoJust] = useState(false);
 
   useEffect(() => {
     if (perfil) {
@@ -114,7 +121,7 @@ export default function ReportesAuxiliar() {
     if (!silencioso) setCargando(true);
     setErrorMsg('');
 
-    const [reporte, porDia] = await Promise.all([
+    const [reporte, porDia, marc] = await Promise.all([
       // Se trae TODO el rango (sin filtrar turno) y el filtrado por turno /
       // auxiliar se hace del lado del cliente, para que cambiar de filtro
       // sea instantáneo sin volver a consultar la base.
@@ -124,6 +131,7 @@ export default function ReportesAuxiliar() {
         p_turno: null,
       }),
       cargarTardanzasRaw(inicio, fin),
+      cargarMarcaciones(inicio, fin),
     ]);
 
     if (!silencioso) setCargando(false);
@@ -137,6 +145,77 @@ export default function ReportesAuxiliar() {
     }
     setFilas(reporte.data || []);
     setTardanzasRaw(porDia);
+    setMarcaciones(marc);
+    setJustificaciones(await cargarJustificaciones(inicio, fin));
+  }
+
+  async function cargarJustificaciones(inicio = fechaInicio, fin = fechaFin) {
+    const { data } = await supabase
+      .from('justificaciones')
+      .select('estudiante_id, fecha, tipo, motivo')
+      .gte('fecha', inicio)
+      .lte('fecha', fin);
+    return data || [];
+  }
+
+  // Guarda (o actualiza) la justificación del alumno para la fecha dada.
+  async function guardarJustificacion() {
+    if (!justificando || !motivoInput.trim()) return;
+    setGuardandoJust(true);
+    const { error } = await supabase.from('justificaciones').upsert(
+      {
+        estudiante_id: justificando.estudiante_id,
+        fecha: justificando.fecha,
+        tipo: justificando.tipo,
+        motivo: motivoInput.trim(),
+        registrado_por: perfil?.id,
+      },
+      { onConflict: 'estudiante_id,fecha' }
+    );
+    setGuardandoJust(false);
+    if (error) {
+      toast('No se pudo guardar la justificación', 'error');
+      return;
+    }
+    toast('Justificación guardada', 'exito');
+    setJustificando(null);
+    setJustificaciones(await cargarJustificaciones(fechaInicio, fechaFin));
+  }
+
+  function abrirJustificar(f, tipo, fecha, motivoActual) {
+    setJustificando({ estudiante_id: f.estudiante_id, nombre: `${f.apellidos}, ${f.nombres}`, tipo, fecha });
+    setMotivoInput(motivoActual || '');
+  }
+
+  // Quita la justificación: el alumno vuelve a contar como falta/tardanza.
+  async function eliminarJustificacion() {
+    if (!justificando) return;
+    setGuardandoJust(true);
+    const { error } = await supabase
+      .from('justificaciones')
+      .delete()
+      .eq('estudiante_id', justificando.estudiante_id)
+      .eq('fecha', justificando.fecha);
+    setGuardandoJust(false);
+    if (error) {
+      toast('No se pudo quitar la justificación', 'error');
+      return;
+    }
+    toast('Justificación quitada', 'info');
+    setJustificando(null);
+    setJustificaciones(await cargarJustificaciones(fechaInicio, fechaFin));
+  }
+
+  // Marcaciones reales del rango (con hora), para mostrar a qué hora llegó
+  // cada alumno en el detalle.
+  async function cargarMarcaciones(inicio = fechaInicio, fin = fechaFin) {
+    const { data } = await supabase
+      .from('asistencias')
+      .select('estudiante_id, fecha, hora_ingreso, estado')
+      .gte('fecha', inicio)
+      .lte('fecha', fin)
+      .order('hora_ingreso', { ascending: true });
+    return data || [];
   }
 
   async function cargarTardanzasRaw(inicio = fechaInicio, fin = fechaFin) {
@@ -230,10 +309,52 @@ export default function ReportesAuxiliar() {
     () => ordenar(filasVisibles.filter((f) => Number(f.total_tarde) > 0)),
     [filasVisibles]
   );
+  // Justificaciones indexadas por "estudiante_id|fecha".
+  const justMap = useMemo(() => {
+    const m = new Map();
+    justificaciones.forEach((j) => m.set(`${j.estudiante_id}|${j.fecha}`, j));
+    return m;
+  }, [justificaciones]);
+
+  // Justificaciones de FALTA por alumno (ordenadas por fecha). Cada una
+  // descuenta una falta del conteo.
+  const justFaltasPorEstudiante = useMemo(() => {
+    const m = {};
+    justificaciones.forEach((j) => {
+      if (j.tipo !== 'FALTA') return;
+      (m[j.estudiante_id] ||= []).push(j);
+    });
+    Object.values(m).forEach((arr) => arr.sort((a, b) => a.fecha.localeCompare(b.fecha)));
+    return m;
+  }, [justificaciones]);
+
+  // Faltas efectivas = faltas del rango menos las justificadas.
+  const faltasEfectivas = (f) =>
+    Math.max(0, Number(f.total_falta || 0) - (justFaltasPorEstudiante[f.estudiante_id]?.length || 0));
+
+  // Posibles faltas = alumnos que aún tienen faltas efectivas (>0).
   const faltonesLista = useMemo(
-    () => ordenar(filasVisibles.filter((f) => Number(f.total_asistio) + Number(f.total_tarde) === 0)),
-    [filasVisibles]
+    () => ordenar(filasVisibles.filter((f) => faltasEfectivas(f) > 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filasVisibles, justFaltasPorEstudiante]
   );
+
+  // Justificados = alumnos con al menos una falta justificada en el rango.
+  const justificadosLista = useMemo(
+    () => ordenar(filasVisibles.filter((f) => (justFaltasPorEstudiante[f.estudiante_id]?.length || 0) > 0)),
+    [filasVisibles, justFaltasPorEstudiante]
+  );
+
+  // Hora de llegada por alumno y por estado (para el detalle). En un solo día
+  // es único; en un rango con varias marcaciones, queda la última de cada tipo.
+  const horaPorEstudiante = useMemo(() => {
+    const m = {};
+    marcaciones.forEach((r) => {
+      if (!m[r.estudiante_id]) m[r.estudiante_id] = {};
+      m[r.estudiante_id][r.estado] = { hora: r.hora_ingreso, fecha: r.fecha };
+    });
+    return m;
+  }, [marcaciones]);
 
   const barrasDiarias = useMemo(() => {
     const fechas = Object.keys(tardanzasPorDia).sort().slice(-5);
@@ -259,6 +380,15 @@ export default function ReportesAuxiliar() {
 
   const nombreAuxSel = auxiliares.find((a) => a.id === auxiliarSel)?.nombres || '';
 
+  // Texto distintivo de justificación para el Excel (solo aplica a un día).
+  // Ej.: "Falta justificada: cita médica". Vacío si no tiene justificación.
+  function textoJustificacion(f) {
+    const arr = justFaltasPorEstudiante[f.estudiante_id] || [];
+    if (!arr.length) return '';
+    if (fechaInicio === fechaFin) return `Falta justificada: ${arr[0].motivo}`;
+    return arr.map((j) => `${j.fecha.slice(8, 10)}/${j.fecha.slice(5, 7)}: ${j.motivo}`).join('; ');
+  }
+
   function exportarExcel(soloTurno) {
     let base = filasVisibles;
     if (soloTurno) base = base.filter((f) => f.turno === soloTurno);
@@ -275,8 +405,10 @@ export default function ReportesAuxiliar() {
       Turno: f.turno,
       Asistencias: f.total_asistio,
       Tardanzas: f.total_tarde,
-      Faltas: f.total_falta,
+      Faltas: faltasEfectivas(f),
+      'Faltas justificadas': justFaltasPorEstudiante[f.estudiante_id]?.length || 0,
       'Días evaluados': f.total_dias,
+      Justificación: textoJustificacion(f),
     }));
     const hoja = XLSX.utils.json_to_sheet(filasExport);
     const libro = XLSX.utils.book_new();
@@ -290,17 +422,24 @@ export default function ReportesAuxiliar() {
   // Exporta a Excel una lista puntual (asistieron / faltones) desde el modal.
   function exportarLista(lista, tipo) {
     if (!lista.length) return;
-    const filasExport = lista.map((f) => ({
-      DNI: f.dni,
-      Apellidos: f.apellidos,
-      Nombres: f.nombres,
-      Grado: f.grado,
-      Sección: f.seccion,
-      Turno: f.turno,
-      Asistencias: f.total_asistio,
-      Tardanzas: f.total_tarde,
-      Faltas: f.total_falta,
-    }));
+    const filasExport = lista.map((f) => {
+      const marca = horaPorEstudiante[f.estudiante_id];
+      const hora = tipo === 'tardanzas' ? marca?.TARDE?.hora : tipo === 'asistieron' ? marca?.ASISTIO?.hora : '';
+      return {
+        DNI: f.dni,
+        Apellidos: f.apellidos,
+        Nombres: f.nombres,
+        Grado: f.grado,
+        Sección: f.seccion,
+        Turno: f.turno,
+        'Hora de llegada': hora ? formatearHoraDesdeTexto(hora) : '',
+        Asistencias: f.total_asistio,
+        Tardanzas: f.total_tarde,
+        Faltas: faltasEfectivas(f),
+        'Faltas justificadas': justFaltasPorEstudiante[f.estudiante_id]?.length || 0,
+        Justificación: textoJustificacion(f),
+      };
+    });
     const hoja = XLSX.utils.json_to_sheet(filasExport);
     const libro = XLSX.utils.book_new();
     const nombreHoja = { faltones: 'Faltones', tardanzas: 'Tardanzas', asistieron: 'Asistieron' }[tipo] || 'Reporte';
@@ -503,6 +642,32 @@ export default function ReportesAuxiliar() {
           </p>
         </button>
 
+        {/* Justificados — alumnos con falta(s) justificada(s). */}
+        <button
+          type="button"
+          onClick={() => justificadosLista.length && setDetalle('justificados')}
+          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-green-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <div className="flex justify-between items-start mb-4">
+            <h3 className="font-title-md text-title-md text-on-surface">Justificados</h3>
+            <div className="p-2 bg-green-100 rounded-lg text-green-700">
+              <Icon name="verified" />
+            </div>
+          </div>
+          <div className="flex items-end gap-2 mb-2">
+            <Contador valor={justificadosLista.length} className="font-display-lg text-display-lg text-green-600" />
+          </div>
+          <p className="font-label-md text-label-md text-on-surface-variant">
+            {justificadosLista.length === 1 ? 'alumno con falta justificada' : 'alumnos con falta justificada'}
+          </p>
+          <p className="font-label-md text-label-md text-on-surface-variant/70 mt-0.5">
+            cada justificación descuenta una falta
+          </p>
+          <p className="mt-4 font-label-md text-label-md text-primary flex items-center gap-1">
+            Ver lista <Icon name="arrow_forward" className="text-[16px]" />
+          </p>
+        </button>
+
         {/* Exportar */}
         <div className="bg-surface-container-lowest rounded-xl p-6 border border-outline-variant elevation-1 flex flex-col justify-between relative overflow-hidden">
           <div className="absolute -right-6 -top-6 text-primary-fixed-dim opacity-20">
@@ -687,13 +852,14 @@ export default function ReportesAuxiliar() {
             asistieron: { titulo: 'Asistió temprano', icon: 'how_to_reg', color: 'text-primary', lista: asistieronLista },
             tardanzas: { titulo: 'Asistió tarde', icon: 'schedule', color: 'text-error', lista: tardanzasLista },
             faltones: { titulo: 'Posibles faltas (no marcaron)', icon: 'person_alert', color: 'text-amber-600', lista: faltonesLista },
+            justificados: { titulo: 'Faltas justificadas', icon: 'verified', color: 'text-green-600', lista: justificadosLista },
           };
           const cfg = CFG[detalle];
           const lista = cfg.lista;
-          const rangoLabel =
-            fechaInicio === fechaFin
-              ? fechaConDia(fechaInicio)
-              : `${fechaConDia(fechaInicio)} a ${fechaConDia(fechaFin)}`;
+          const esUnDia = fechaInicio === fechaFin;
+          const rangoLabel = esUnDia
+            ? fechaConDia(fechaInicio)
+            : `${fechaConDia(fechaInicio)} a ${fechaConDia(fechaFin)}`;
 
           // Opciones de grado+sección presentes en esta lista (orden 1ro→5to).
           const opcionesGS = Array.from(
@@ -779,17 +945,39 @@ export default function ReportesAuxiliar() {
                         <p className="font-label-md text-label-md text-on-surface-variant">
                           {f.grado} "{f.seccion}" · {f.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
                         </p>
+                        {(() => {
+                          if (detalle === 'faltones') return null;
+                          const marca = horaPorEstudiante[f.estudiante_id];
+                          const h = detalle === 'tardanzas' ? marca?.TARDE?.hora : marca?.ASISTIO?.hora;
+                          if (!h) return null;
+                          return (
+                            <p className="font-label-md text-label-md text-primary flex items-center gap-1 mt-0.5">
+                              <Icon name="schedule" className="text-[14px]" /> Llegó {formatearHoraDesdeTexto(h)}
+                            </p>
+                          );
+                        })()}
+                        {detalle === 'justificados' &&
+                          (() => {
+                            const arr = justFaltasPorEstudiante[f.estudiante_id] || [];
+                            if (!arr.length) return null;
+                            return (
+                              <div className="mt-0.5 flex flex-col gap-0.5">
+                                {arr.map((j) => (
+                                  <p
+                                    key={j.fecha}
+                                    className="font-label-md text-label-md text-green-700 flex items-start gap-1"
+                                  >
+                                    <Icon name="verified" className="text-[14px] mt-0.5" />
+                                    <span>
+                                      {esUnDia ? '' : `${j.fecha.slice(8, 10)}/${j.fecha.slice(5, 7)}: `}
+                                      {j.motivo}
+                                    </span>
+                                  </p>
+                                ))}
+                              </div>
+                            );
+                          })()}
                       </div>
-                      {detalle === 'faltones' && (
-                        <span className="shrink-0 text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
-                          {f.total_falta} {Number(f.total_falta) === 1 ? 'falta' : 'faltas'}
-                        </span>
-                      )}
-                      {detalle === 'tardanzas' && (
-                        <span className="shrink-0 text-red-700 bg-red-50 border border-red-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
-                          {f.total_tarde} {Number(f.total_tarde) === 1 ? 'tardanza' : 'tardanzas'}
-                        </span>
-                      )}
                       {detalle === 'asistieron' && (
                         <div className="shrink-0 flex gap-1.5 font-label-md text-label-md">
                           <span className="text-blue-700 bg-blue-50 rounded px-2 py-0.5 whitespace-nowrap">
@@ -799,6 +987,64 @@ export default function ReportesAuxiliar() {
                             <span className="text-red-700 bg-red-50 rounded px-2 py-0.5 whitespace-nowrap">
                               {f.total_tarde} tarde
                             </span>
+                          )}
+                        </div>
+                      )}
+                      {(detalle === 'tardanzas' || detalle === 'faltones') &&
+                        (() => {
+                          const tipoJ = detalle === 'tardanzas' ? 'TARDE' : 'FALTA';
+                          const just = esUnDia ? justMap.get(`${f.estudiante_id}|${fechaInicio}`) : null;
+                          const tieneEnRango =
+                            !esUnDia && justificaciones.some((j) => j.estudiante_id === f.estudiante_id);
+                          return (
+                            <div className="shrink-0 flex flex-col items-end gap-1">
+                              {detalle === 'faltones' ? (
+                                <span className="text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
+                                  {faltasEfectivas(f)} {faltasEfectivas(f) === 1 ? 'falta' : 'faltas'}
+                                </span>
+                              ) : (
+                                <span className="text-red-700 bg-red-50 border border-red-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
+                                  {f.total_tarde} {Number(f.total_tarde) === 1 ? 'tardanza' : 'tardanzas'}
+                                </span>
+                              )}
+                              {just ? (
+                                <button
+                                  onClick={() => abrirJustificar(f, tipoJ, fechaInicio, just.motivo)}
+                                  title={`Justificado: ${just.motivo} (toca para editar)`}
+                                  className="text-green-700 bg-green-50 border border-green-200 rounded-full px-2.5 py-0.5 font-label-md text-label-md flex items-center gap-1 hover:bg-green-100 transition-colors"
+                                >
+                                  <Icon name="verified" className="text-[14px]" /> Justificado
+                                </button>
+                              ) : esUnDia ? (
+                                <button
+                                  onClick={() => abrirJustificar(f, tipoJ, fechaInicio, '')}
+                                  className="text-primary border border-primary/40 rounded-full px-2.5 py-0.5 font-label-md text-label-md flex items-center gap-1 hover:bg-primary/10 transition-colors"
+                                >
+                                  <Icon name="edit_note" className="text-[16px]" /> Justificar
+                                </button>
+                              ) : tieneEnRango ? (
+                                <span className="text-green-700 font-label-md text-label-md flex items-center gap-1">
+                                  <Icon name="verified" className="text-[14px]" /> Justificado
+                                </span>
+                              ) : null}
+                            </div>
+                          );
+                        })()}
+                      {detalle === 'justificados' && (
+                        <div className="shrink-0 flex flex-col items-end gap-1">
+                          <span className="text-green-700 bg-green-50 border border-green-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
+                            {justFaltasPorEstudiante[f.estudiante_id]?.length || 0} justificada
+                            {(justFaltasPorEstudiante[f.estudiante_id]?.length || 0) === 1 ? '' : 's'}
+                          </span>
+                          {esUnDia && (
+                            <button
+                              onClick={() =>
+                                abrirJustificar(f, 'FALTA', fechaInicio, justMap.get(`${f.estudiante_id}|${fechaInicio}`)?.motivo)
+                              }
+                              className="text-primary border border-primary/40 rounded-full px-2.5 py-0.5 font-label-md text-label-md flex items-center gap-1 hover:bg-primary/10 transition-colors"
+                            >
+                              <Icon name="edit_note" className="text-[16px]" /> Editar
+                            </button>
                           )}
                         </div>
                       )}
@@ -819,6 +1065,64 @@ export default function ReportesAuxiliar() {
             </div>
           );
         })()}
+
+      {/* Diálogo para escribir/editar la justificación (encima del modal). */}
+      {justificando && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setJustificando(null)} />
+          <div className="relative bg-surface rounded-2xl border border-outline-variant shadow-2xl w-full max-w-md flex flex-col">
+            <div className="p-5 border-b border-outline-variant">
+              <h3 className="font-title-lg text-title-lg text-on-surface flex items-center gap-2">
+                <Icon name="edit_note" className="text-primary" />
+                Justificar {justificando.tipo === 'TARDE' ? 'tardanza' : 'falta'}
+              </h3>
+              <p className="font-label-md text-label-md text-on-surface-variant mt-0.5">
+                {justificando.nombre} · {fechaConDia(justificando.fecha)}
+              </p>
+            </div>
+            <div className="p-5">
+              <label className="block font-label-md text-label-md text-on-surface-variant mb-1">Motivo</label>
+              <textarea
+                value={motivoInput}
+                onChange={(e) => setMotivoInput(e.target.value)}
+                rows={4}
+                autoFocus
+                placeholder="Ej. Cita médica, permiso de los padres, problema de transporte…"
+                className="w-full bg-surface border border-outline-variant rounded-lg px-3 py-2 text-on-surface focus:outline-none focus:ring-2 focus:ring-secondary/30 focus:border-secondary transition-all resize-none"
+              />
+            </div>
+            <div className="p-3 border-t border-outline-variant flex justify-between gap-2">
+              <div>
+                {justMap.has(`${justificando.estudiante_id}|${justificando.fecha}`) && (
+                  <button
+                    onClick={eliminarJustificacion}
+                    disabled={guardandoJust}
+                    className="flex items-center gap-1 px-3 py-2 rounded-lg font-label-md text-label-md text-error hover:bg-error-container/40 transition-colors disabled:opacity-50"
+                  >
+                    <Icon name="delete" className="text-[18px]" /> Quitar
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setJustificando(null)}
+                  className="px-4 py-2 rounded-lg font-label-md text-label-md text-on-surface-variant hover:bg-surface-container-high transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={guardarJustificacion}
+                  disabled={!motivoInput.trim() || guardandoJust}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors disabled:opacity-50"
+                >
+                  <Icon name="save" className="text-[18px]" />
+                  {guardandoJust ? 'Guardando…' : 'Guardar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
