@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../lib/AuthContext';
 import { useUI } from '../lib/UIContext';
-import { claveGradoSeccion, fechaLocalISO, HORARIOS } from '../utils/turnos';
+import { claveGradoSeccion, fechaLocalISO, gradoNumero, HORARIOS } from '../utils/turnos';
 import Icon from './Icon';
 import Cargador from './Cargador';
 
@@ -17,6 +17,15 @@ function haceNDiasISO(n) {
 }
 function iniciales(nombres, apellidos) {
   return `${(apellidos || '?')[0] || ''}${(nombres || '?')[0] || ''}`.toUpperCase();
+}
+
+// Fecha ISO -> "Lunes 01/09/2026" (con el día de la semana para identificarlo).
+function fechaConDia(iso) {
+  if (!iso) return '';
+  const d = new Date(`${iso}T00:00:00`);
+  const dia = d.toLocaleDateString('es-PE', { weekday: 'long' });
+  const [y, m, dd] = iso.split('-');
+  return `${dia.charAt(0).toUpperCase()}${dia.slice(1)} ${dd}/${m}/${y}`;
 }
 
 // Número con animación de conteo (count-up) desde el valor anterior hasta el
@@ -62,9 +71,11 @@ export default function ReportesAuxiliar() {
   const [tardanzasRaw, setTardanzasRaw] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  // Modal de detalle: null | 'asistieron' | 'faltones'. Muestra la lista
-  // completa de alumnos al tocar la card correspondiente.
+  // Modal de detalle: null | 'asistieron' | 'tardanzas' | 'faltones'. Muestra
+  // la lista completa de alumnos al tocar la card correspondiente.
   const [detalle, setDetalle] = useState(null);
+  // Filtro de grado+sección DENTRO del modal ('' = todas).
+  const [detalleFiltro, setDetalleFiltro] = useState('');
 
   useEffect(() => {
     if (perfil) {
@@ -73,6 +84,11 @@ export default function ReportesAuxiliar() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [perfil]);
+
+  // Al abrir/cambiar el modal, se limpia el filtro de grado/sección.
+  useEffect(() => {
+    setDetalleFiltro('');
+  }, [detalle]);
 
   // Auto-refresco silencioso cada 30 s: trae marcaciones nuevas sin que el
   // usuario tenga que actualizar (útil sobre todo viendo "hoy").
@@ -674,7 +690,32 @@ export default function ReportesAuxiliar() {
           };
           const cfg = CFG[detalle];
           const lista = cfg.lista;
-          const rangoLabel = fechaInicio === fechaFin ? fechaInicio : `${fechaInicio} a ${fechaFin}`;
+          const rangoLabel =
+            fechaInicio === fechaFin
+              ? fechaConDia(fechaInicio)
+              : `${fechaConDia(fechaInicio)} a ${fechaConDia(fechaFin)}`;
+
+          // Opciones de grado+sección presentes en esta lista (orden 1ro→5to).
+          const opcionesGS = Array.from(
+            lista
+              .reduce((m, f) => {
+                const key = `${f.grado}|${f.seccion}`;
+                if (!m.has(key)) {
+                  m.set(key, {
+                    key,
+                    grado: Number(gradoNumero(f.grado)) || 0,
+                    seccion: String(f.seccion || '').trim().toUpperCase(),
+                    label: `${f.grado} "${f.seccion}"`,
+                  });
+                }
+                return m;
+              }, new Map())
+              .values()
+          ).sort((a, b) => a.grado - b.grado || a.seccion.localeCompare(b.seccion, 'es'));
+
+          const listaFiltrada = detalleFiltro
+            ? lista.filter((f) => `${f.grado}|${f.seccion}` === detalleFiltro)
+            : lista;
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
               <div className="absolute inset-0 bg-black/40" onClick={() => setDetalle(null)} />
@@ -686,7 +727,9 @@ export default function ReportesAuxiliar() {
                       {cfg.titulo}
                     </h3>
                     <p className="font-label-md text-label-md text-on-surface-variant mt-0.5">
-                      {lista.length} {lista.length === 1 ? 'alumno' : 'alumnos'} · {rangoLabel}
+                      {listaFiltrada.length}
+                      {detalleFiltro ? ` de ${lista.length}` : ''}{' '}
+                      {listaFiltrada.length === 1 ? 'alumno' : 'alumnos'} · {rangoLabel}
                     </p>
                   </div>
                   <button
@@ -698,11 +741,30 @@ export default function ReportesAuxiliar() {
                   </button>
                 </div>
 
+                {/* Filtro rápido por grado y sección dentro del modal. */}
+                <div className="px-4 pt-3 pb-1 border-b border-outline-variant">
+                  <label className="block font-label-md text-label-md text-on-surface-variant mb-1">
+                    Grado y sección
+                  </label>
+                  <select
+                    value={detalleFiltro}
+                    onChange={(e) => setDetalleFiltro(e.target.value)}
+                    className="w-full bg-surface border border-outline-variant text-on-surface font-body-md text-body-md rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-secondary"
+                  >
+                    <option value="">Todos los grados y secciones ({lista.length})</option>
+                    {opcionesGS.map((o) => (
+                      <option key={o.key} value={o.key}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
-                  {lista.length === 0 && (
+                  {listaFiltrada.length === 0 && (
                     <p className="text-center text-on-surface-variant py-8">Sin alumnos para mostrar.</p>
                   )}
-                  {lista.map((f) => (
+                  {listaFiltrada.map((f) => (
                     <div
                       key={f.estudiante_id}
                       className="flex items-center gap-3 p-3 rounded-lg border border-outline-variant bg-surface-container-lowest"
@@ -746,8 +808,8 @@ export default function ReportesAuxiliar() {
 
                 <div className="p-3 border-t border-outline-variant flex justify-end rounded-b-2xl">
                   <button
-                    onClick={() => exportarLista(lista, detalle)}
-                    disabled={lista.length === 0}
+                    onClick={() => exportarLista(listaFiltrada, detalle)}
+                    disabled={listaFiltrada.length === 0}
                     className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors disabled:opacity-50"
                   >
                     <Icon name="download" className="text-[18px]" /> Exportar lista
