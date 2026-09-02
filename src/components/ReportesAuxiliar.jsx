@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { supabase } from '../lib/supabaseClient';
 import { useAuth } from '../lib/AuthContext';
@@ -19,6 +19,33 @@ function iniciales(nombres, apellidos) {
   return `${(apellidos || '?')[0] || ''}${(nombres || '?')[0] || ''}`.toUpperCase();
 }
 
+// Número con animación de conteo (count-up) desde el valor anterior hasta el
+// nuevo, con easing suave. Anima al cargar y cada vez que el número cambia.
+function Contador({ valor, className, duracion = 700 }) {
+  const [mostrado, setMostrado] = useState(0);
+  const desdeRef = useRef(0);
+  const rafRef = useRef(0);
+
+  useEffect(() => {
+    const desde = desdeRef.current;
+    const objetivo = Number(valor) || 0;
+    const inicio = performance.now();
+    cancelAnimationFrame(rafRef.current);
+
+    const tick = (ahora) => {
+      const t = Math.min(1, (ahora - inicio) / duracion);
+      const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      setMostrado(Math.round(desde + (objetivo - desde) * eased));
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+      else desdeRef.current = objetivo;
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [valor, duracion]);
+
+  return <span className={className}>{mostrado.toLocaleString('es-PE')}</span>;
+}
+
 export default function ReportesAuxiliar() {
   const { perfil, esAdmin } = useAuth();
   const { toast } = useUI();
@@ -36,6 +63,9 @@ export default function ReportesAuxiliar() {
   const [tardanzasRaw, setTardanzasRaw] = useState([]);
   const [cargando, setCargando] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  // Modal de detalle: null | 'asistieron' | 'faltones'. Muestra la lista
+  // completa de alumnos al tocar la card correspondiente.
+  const [detalle, setDetalle] = useState(null);
 
   useEffect(() => {
     if (perfil) {
@@ -44,6 +74,15 @@ export default function ReportesAuxiliar() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [perfil]);
+
+  // Auto-refresco silencioso cada 30 s: trae marcaciones nuevas sin que el
+  // usuario tenga que actualizar (útil sobre todo viendo "hoy").
+  useEffect(() => {
+    if (!perfil) return;
+    const id = setInterval(() => consultar(fechaInicio, fechaFin, true), 30000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil, fechaInicio, fechaFin]);
 
   async function cargarAuxiliares() {
     const { data } = await supabase
@@ -54,8 +93,10 @@ export default function ReportesAuxiliar() {
     setAuxiliares(data || []);
   }
 
-  async function consultar() {
-    setCargando(true);
+  // `silencioso` = refresco en segundo plano (auto): no muestra el loader ni
+  // borra los datos actuales si algo falla, para no interrumpir la vista.
+  async function consultar(inicio = fechaInicio, fin = fechaFin, silencioso = false) {
+    if (!silencioso) setCargando(true);
     setErrorMsg('');
 
     const [reporte, porDia] = await Promise.all([
@@ -63,31 +104,33 @@ export default function ReportesAuxiliar() {
       // auxiliar se hace del lado del cliente, para que cambiar de filtro
       // sea instantáneo sin volver a consultar la base.
       supabase.rpc('obtener_reporte_asistencia', {
-        p_fecha_inicio: fechaInicio,
-        p_fecha_fin: fechaFin,
+        p_fecha_inicio: inicio,
+        p_fecha_fin: fin,
         p_turno: null,
       }),
-      cargarTardanzasRaw(),
+      cargarTardanzasRaw(inicio, fin),
     ]);
 
-    setCargando(false);
+    if (!silencioso) setCargando(false);
     if (reporte.error) {
-      setErrorMsg(reporte.error.message);
-      toast('No se pudo cargar el reporte', 'error');
-      setFilas([]);
+      if (!silencioso) {
+        setErrorMsg(reporte.error.message);
+        toast('No se pudo cargar el reporte', 'error');
+        setFilas([]);
+      }
       return;
     }
     setFilas(reporte.data || []);
     setTardanzasRaw(porDia);
   }
 
-  async function cargarTardanzasRaw() {
+  async function cargarTardanzasRaw(inicio = fechaInicio, fin = fechaFin) {
     const { data } = await supabase
       .from('asistencias')
       .select('fecha, estudiantes!inner(turno, grado, seccion)')
       .eq('estado', 'TARDE')
-      .gte('fecha', fechaInicio)
-      .lte('fecha', fechaFin);
+      .gte('fecha', inicio)
+      .lte('fecha', fin);
     return data || [];
   }
 
@@ -156,6 +199,27 @@ export default function ReportesAuxiliar() {
     return { presentes, posibles, alumnos, dias };
   }, [consolidado, filasVisibles]);
 
+  // Listas por categoría. En un solo día son mutuamente excluyentes
+  // (asistieron + tardanzas + faltones = todos los alumnos):
+  //  - asistieron = marcó PUNTUAL al menos una vez.
+  //  - tardanzas  = marcó TARDE al menos una vez.
+  //  - faltones   = no marcó nunca (posibles ausentes).
+  const ordenar = (lista) =>
+    [...lista].sort((a, b) => `${a.apellidos} ${a.nombres}`.localeCompare(`${b.apellidos} ${b.nombres}`, 'es'));
+
+  const asistieronLista = useMemo(
+    () => ordenar(filasVisibles.filter((f) => Number(f.total_asistio) > 0)),
+    [filasVisibles]
+  );
+  const tardanzasLista = useMemo(
+    () => ordenar(filasVisibles.filter((f) => Number(f.total_tarde) > 0)),
+    [filasVisibles]
+  );
+  const faltonesLista = useMemo(
+    () => ordenar(filasVisibles.filter((f) => Number(f.total_asistio) + Number(f.total_tarde) === 0)),
+    [filasVisibles]
+  );
+
   const barrasDiarias = useMemo(() => {
     const fechas = Object.keys(tardanzasPorDia).sort().slice(-5);
     const max = Math.max(1, ...fechas.map((f) => tardanzasPorDia[f]));
@@ -208,6 +272,28 @@ export default function ReportesAuxiliar() {
     toast(`Reporte exportado (${base.length} alumno(s))`, 'exito');
   }
 
+  // Exporta a Excel una lista puntual (asistieron / faltones) desde el modal.
+  function exportarLista(lista, tipo) {
+    if (!lista.length) return;
+    const filasExport = lista.map((f) => ({
+      DNI: f.dni,
+      Apellidos: f.apellidos,
+      Nombres: f.nombres,
+      Grado: f.grado,
+      Sección: f.seccion,
+      Turno: f.turno,
+      Asistencias: f.total_asistio,
+      Tardanzas: f.total_tarde,
+      Faltas: f.total_falta,
+    }));
+    const hoja = XLSX.utils.json_to_sheet(filasExport);
+    const libro = XLSX.utils.book_new();
+    const nombreHoja = { faltones: 'Faltones', tardanzas: 'Tardanzas', asistieron: 'Asistieron' }[tipo] || 'Reporte';
+    XLSX.utils.book_append_sheet(libro, hoja, nombreHoja);
+    XLSX.writeFile(libro, `${tipo}_${fechaInicio}_a_${fechaFin}.xlsx`);
+    toast(`Lista exportada (${lista.length} alumno(s))`, 'exito');
+  }
+
   const dasharrayManana = `${distribucion.pctManana}, 100`;
   const dasharrayTarde = `${distribucion.pctTarde}, 100`;
 
@@ -236,13 +322,19 @@ export default function ReportesAuxiliar() {
             <input
               type="date"
               value={fechaInicio}
-              onChange={(e) => setFechaInicio(e.target.value)}
+              onChange={(e) => {
+                setFechaInicio(e.target.value);
+                if (e.target.value) consultar(e.target.value, fechaFin);
+              }}
               className="flex-1 sm:flex-none bg-surface border border-outline-variant text-on-surface font-body-md text-body-md rounded-lg px-3 py-2 min-w-0"
             />
             <input
               type="date"
               value={fechaFin}
-              onChange={(e) => setFechaFin(e.target.value)}
+              onChange={(e) => {
+                setFechaFin(e.target.value);
+                if (e.target.value) consultar(fechaInicio, e.target.value);
+              }}
               className="flex-1 sm:flex-none bg-surface border border-outline-variant text-on-surface font-body-md text-body-md rounded-lg px-3 py-2 min-w-0"
             />
           </div>
@@ -290,10 +382,12 @@ export default function ReportesAuxiliar() {
             </div>
           )}
           <button
-            onClick={consultar}
-            className="w-full sm:w-auto bg-primary text-on-primary rounded-lg px-4 py-2 font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors"
+            onClick={() => consultar()}
+            title="Volver a traer los datos del rango (marcaciones nuevas)"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 bg-primary text-on-primary rounded-lg px-4 py-2 font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors"
           >
-            Consultar
+            <Icon name="refresh" className="text-[18px]" />
+            Actualizar
           </button>
         </div>
       </div>
@@ -303,43 +397,54 @@ export default function ReportesAuxiliar() {
       )}
 
       {/* KPI Bento Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        {/* Asistencia % */}
-        <div className="bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-primary">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 mb-8">
+        {/* Asistieron — tocable: muestra la lista de quienes marcaron puntual. */}
+        <button
+          type="button"
+          onClick={() => asistieronLista.length && setDetalle('asistieron')}
+          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-primary hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
           <div className="flex justify-between items-start mb-4">
-            <h3 className="font-title-md text-title-md text-on-surface">Asistencia del Período</h3>
+            <h3 className="font-title-md text-title-md text-on-surface">Asistió temprano</h3>
             <div className="p-2 bg-primary-fixed rounded-lg text-on-primary-fixed">
               <Icon name="how_to_reg" />
             </div>
           </div>
           <div className="flex items-end gap-2 mb-2">
-            <span className="font-display-lg text-display-lg text-on-surface">{porcentajeAsistencia}%</span>
+            <Contador valor={asistieronLista.length} className="font-display-lg text-display-lg text-primary" />
           </div>
           <p className="font-label-md text-label-md text-on-surface-variant">
-            {resumenAsistencia.presentes.toLocaleString('es-PE')} asistencias de{' '}
-            {resumenAsistencia.posibles.toLocaleString('es-PE')} posibles
+            {asistieronLista.length === 1 ? 'alumno asistió temprano' : 'alumnos asistieron temprano'}
           </p>
           <p className="font-label-md text-label-md text-on-surface-variant/70 mt-0.5">
-            {resumenAsistencia.alumnos.toLocaleString('es-PE')} alumnos × {resumenAsistencia.dias}{' '}
-            {resumenAsistencia.dias === 1 ? 'día de clase' : 'días de clase'}
+            de {filasVisibles.length.toLocaleString('es-PE')} alumnos en total
           </p>
-          <div className="mt-4 w-full bg-surface-container h-2 rounded-full overflow-hidden">
-            <div className="bg-primary h-full rounded-full" style={{ width: `${porcentajeAsistencia}%` }} />
-          </div>
-        </div>
+          <p className="mt-4 font-label-md text-label-md text-primary flex items-center gap-1">
+            Ver lista <Icon name="arrow_forward" className="text-[16px]" />
+          </p>
+        </button>
 
-        {/* Tardanzas */}
-        <div className="bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-error">
+        {/* Tardanzas — tocable: muestra la lista de alumnos que llegaron tarde. */}
+        <button
+          type="button"
+          onClick={() => tardanzasLista.length && setDetalle('tardanzas')}
+          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-error hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
           <div className="flex justify-between items-start mb-4">
-            <h3 className="font-title-md text-title-md text-on-surface">Tardanzas del Período</h3>
+            <h3 className="font-title-md text-title-md text-on-surface">Asistió tarde</h3>
             <div className="p-2 bg-error-container rounded-lg text-on-error-container">
               <Icon name="schedule" />
             </div>
           </div>
           <div className="flex items-end gap-2 mb-2">
-            <span className="font-display-lg text-display-lg text-error">{consolidado.tarde}</span>
+            <Contador valor={tardanzasLista.length} className="font-display-lg text-display-lg text-error" />
           </div>
-          <p className="font-label-md text-label-md text-on-surface-variant">Total acumulado en el rango</p>
+          <p className="font-label-md text-label-md text-on-surface-variant">
+            {tardanzasLista.length === 1 ? 'alumno asistió tarde' : 'alumnos asistieron tarde'}
+          </p>
+          <p className="font-label-md text-label-md text-on-surface-variant/70 mt-0.5">
+            {consolidado.tarde.toLocaleString('es-PE')} {consolidado.tarde === 1 ? 'tardanza' : 'tardanzas'} en total
+          </p>
           {barrasDiarias.length > 0 && (
             <div className="mt-4 flex gap-1 h-8 items-end">
               {barrasDiarias.map((b) => (
@@ -352,7 +457,36 @@ export default function ReportesAuxiliar() {
               ))}
             </div>
           )}
-        </div>
+          <p className="mt-4 font-label-md text-label-md text-primary flex items-center gap-1">
+            Ver lista <Icon name="arrow_forward" className="text-[16px]" />
+          </p>
+        </button>
+
+        {/* Posibles Faltones — tocable: alumnos que NO marcaron en el rango. */}
+        <button
+          type="button"
+          onClick={() => faltonesLista.length && setDetalle('faltones')}
+          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-amber-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <div className="flex justify-between items-start mb-4">
+            <h3 className="font-title-md text-title-md text-on-surface">Posibles faltas</h3>
+            <div className="p-2 bg-amber-100 rounded-lg text-amber-700">
+              <Icon name="person_alert" />
+            </div>
+          </div>
+          <div className="flex items-end gap-2 mb-2">
+            <Contador valor={faltonesLista.length} className="font-display-lg text-display-lg text-amber-600" />
+          </div>
+          <p className="font-label-md text-label-md text-on-surface-variant">
+            {faltonesLista.length === 1 ? 'alumno no marcó' : 'alumnos no marcaron'} en el período
+          </p>
+          <p className="font-label-md text-label-md text-on-surface-variant/70 mt-0.5">
+            de {filasVisibles.length.toLocaleString('es-PE')} alumnos en total
+          </p>
+          <p className="mt-4 font-label-md text-label-md text-primary flex items-center gap-1">
+            Ver lista <Icon name="arrow_forward" className="text-[16px]" />
+          </p>
+        </button>
 
         {/* Exportar */}
         <div className="bg-surface-container-lowest rounded-xl p-6 border border-outline-variant elevation-1 flex flex-col justify-between relative overflow-hidden">
@@ -505,7 +639,7 @@ export default function ReportesAuxiliar() {
                 />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
-                <span className="font-display-lg text-3xl font-bold text-on-surface">{distribucion.total}</span>
+                <Contador valor={distribucion.total} className="font-display-lg text-3xl font-bold text-on-surface" />
                 <span className="font-label-md text-label-md text-on-surface-variant">Total</span>
               </div>
             </div>
@@ -530,6 +664,100 @@ export default function ReportesAuxiliar() {
       </div>
 
       {cargando && <Cargador texto="Cargando reporte…" className="mt-8" />}
+
+      {/* Modal de detalle: lista completa de asistieron / tardanzas / faltones. */}
+      {detalle &&
+        (() => {
+          const CFG = {
+            asistieron: { titulo: 'Asistió temprano', icon: 'how_to_reg', color: 'text-primary', lista: asistieronLista },
+            tardanzas: { titulo: 'Asistió tarde', icon: 'schedule', color: 'text-error', lista: tardanzasLista },
+            faltones: { titulo: 'Posibles faltas (no marcaron)', icon: 'person_alert', color: 'text-amber-600', lista: faltonesLista },
+          };
+          const cfg = CFG[detalle];
+          const lista = cfg.lista;
+          const rangoLabel = fechaInicio === fechaFin ? fechaInicio : `${fechaInicio} a ${fechaFin}`;
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/40" onClick={() => setDetalle(null)} />
+              <div className="relative bg-surface rounded-2xl border border-outline-variant shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+                <div className="p-5 border-b border-outline-variant flex justify-between items-center bg-surface-container-lowest rounded-t-2xl">
+                  <div className="min-w-0">
+                    <h3 className="font-title-lg text-title-lg text-on-surface flex items-center gap-2">
+                      <Icon name={cfg.icon} className={cfg.color} />
+                      {cfg.titulo}
+                    </h3>
+                    <p className="font-label-md text-label-md text-on-surface-variant mt-0.5">
+                      {lista.length} {lista.length === 1 ? 'alumno' : 'alumnos'} · {rangoLabel}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setDetalle(null)}
+                    title="Cerrar"
+                    className="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors shrink-0"
+                  >
+                    <Icon name="close" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
+                  {lista.length === 0 && (
+                    <p className="text-center text-on-surface-variant py-8">Sin alumnos para mostrar.</p>
+                  )}
+                  {lista.map((f) => (
+                    <div
+                      key={f.estudiante_id}
+                      className="flex items-center gap-3 p-3 rounded-lg border border-outline-variant bg-surface-container-lowest"
+                    >
+                      <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs bg-surface-variant text-on-surface-variant shrink-0">
+                        {iniciales(f.nombres, f.apellidos)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-title-md text-title-md text-on-surface truncate">
+                          {f.apellidos}, {f.nombres}
+                        </p>
+                        <p className="font-label-md text-label-md text-on-surface-variant">
+                          {f.grado} "{f.seccion}" · {f.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
+                        </p>
+                      </div>
+                      {detalle === 'faltones' && (
+                        <span className="shrink-0 text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
+                          {f.total_falta} {Number(f.total_falta) === 1 ? 'falta' : 'faltas'}
+                        </span>
+                      )}
+                      {detalle === 'tardanzas' && (
+                        <span className="shrink-0 text-red-700 bg-red-50 border border-red-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
+                          {f.total_tarde} {Number(f.total_tarde) === 1 ? 'tardanza' : 'tardanzas'}
+                        </span>
+                      )}
+                      {detalle === 'asistieron' && (
+                        <div className="shrink-0 flex gap-1.5 font-label-md text-label-md">
+                          <span className="text-blue-700 bg-blue-50 rounded px-2 py-0.5 whitespace-nowrap">
+                            {f.total_asistio} puntual
+                          </span>
+                          {Number(f.total_tarde) > 0 && (
+                            <span className="text-red-700 bg-red-50 rounded px-2 py-0.5 whitespace-nowrap">
+                              {f.total_tarde} tarde
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="p-3 border-t border-outline-variant flex justify-end rounded-b-2xl">
+                  <button
+                    onClick={() => exportarLista(lista, detalle)}
+                    disabled={lista.length === 0}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md hover:bg-primary-container hover:text-on-primary-container transition-colors disabled:opacity-50"
+                  >
+                    <Icon name="download" className="text-[18px]" /> Exportar lista
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
     </div>
   );
 }
