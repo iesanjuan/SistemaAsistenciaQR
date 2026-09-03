@@ -456,7 +456,7 @@ export default function CarnetsQR() {
               <button
                 type="button"
                 onClick={() => setMenuAbierto((v) => !v)}
-                className="w-full px-3 py-2 bg-surface border border-outline-variant rounded-lg text-on-surface text-left flex items-center justify-between gap-2 focus:outline-none focus:border-secondary transition-all text-body-md"
+                className="w-full px-3 py-2 bg-surface rounded-lg text-on-surface text-left flex items-center justify-between gap-2 focus:outline-none focus:ring-2 focus:ring-secondary transition-all text-body-md shadow-[inset_0_0_0_1.5px_rgba(11,28,48,0.38)]"
               >
                 <span className="truncate">{resumenSecciones}</span>
                 <Icon name={menuAbierto ? 'expand_less' : 'expand_more'} className="text-[20px] shrink-0" />
@@ -497,7 +497,7 @@ export default function CarnetsQR() {
                       >
                         <span
                           className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-colors ${
-                            activo ? 'bg-primary border-primary text-on-primary' : 'border-outline text-transparent'
+                            activo ? 'bg-primary border-primary text-on-primary' : 'border-on-surface-variant/60 text-transparent'
                           }`}
                         >
                           <Icon name="check" className="text-[16px]" />
@@ -582,7 +582,7 @@ export default function CarnetsQR() {
             <div
               key={e.id}
               className={`relative bg-surface-container-lowest rounded-xl border shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow break-inside-avoid ${
-                marcado ? 'border-primary ring-2 ring-primary' : 'border-outline-variant'
+                marcado ? 'border-primary ring-2 ring-primary' : 'border-[#c5c5d3]'
               }`}
             >
               {/* Casilla para marcar este alumno y reimprimir en grupo */}
@@ -593,7 +593,7 @@ export default function CarnetsQR() {
                 className={`absolute top-4 left-3 z-10 w-5 h-5 rounded flex items-center justify-center border transition-colors no-print ${
                   marcado
                     ? 'bg-primary border-primary text-on-primary'
-                    : 'bg-surface/90 border-outline text-transparent hover:border-primary'
+                    : 'bg-surface/90 border-on-surface-variant/60 text-transparent hover:border-primary'
                 }`}
               >
                 <Icon name="check" className="text-[14px]" />
@@ -604,7 +604,7 @@ export default function CarnetsQR() {
                 title="Clic para marcar/desmarcar este carnet"
                 className="p-5 flex flex-col items-center flex-1 cursor-pointer"
               >
-                <div className="w-32 h-32 flex items-center justify-center border border-outline-variant p-2 rounded-lg bg-white">
+                <div className="w-32 h-32 flex items-center justify-center border border-[#c5c5d3] p-2 rounded-lg bg-white">
                   <QRCodeSVG id={`qr-${e.id}`} value={e.dni} size={112} level="M" />
                 </div>
                 <p className="mt-3 font-title-md text-title-md text-on-surface text-center">
