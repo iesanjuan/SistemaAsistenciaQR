@@ -6,7 +6,6 @@ import { seccionATurno, normalizarGrado } from '../utils/turnos';
 import Icon from './Icon';
 import EditarAlumno from './EditarAlumno';
 
-const COLUMNAS_ESPERADAS = ['DNI', 'NOMBRES', 'APELLIDOS', 'GRADO', 'SECCION'];
 const PAGE_SIZE = 8;
 
 // Alias aceptados por cada columna (ya NORMALIZADOS: sin acentos, sin
@@ -24,6 +23,23 @@ const ALIAS_COLUMNAS = {
   SECCION: ['SECCION', 'SEC'],
 };
 
+// Alias de una ÚNICA columna que trae grado y sección juntos (p. ej. el
+// encabezado "GRAD/SECC" con valores como "1°A", "3° B", "5-C"). Si aparece,
+// tiene prioridad sobre las columnas separadas.
+const ALIAS_COMBINADA = [
+  'GRADO SECCION', 'GRAD SECC', 'GRAD SEC', 'GRADO SEC', 'GRADO Y SECCION',
+  'SECCION Y GRADO', 'GRADO SECC', 'GRADOSECCION',
+];
+
+// Separa un valor combinado "1°A" en { grado: "1", seccion: "A" }. Toma el
+// primer número como grado y la primera letra como sección.
+function separarGradoSeccion(texto) {
+  const t = String(texto ?? '');
+  const grado = (t.match(/\d+/) || [''])[0];
+  const seccion = (t.match(/[A-Za-z]/) || [''])[0].toUpperCase();
+  return { grado, seccion };
+}
+
 // Normaliza el texto de una cabecera: quita acentos y puntuación, colapsa
 // espacios, recorta y pasa a mayúsculas. "  Sección " -> "SECCION",
 // "D.N.I." -> "DNI", "N° DNI" -> "N DNI".
@@ -37,26 +53,66 @@ function normalizarClave(clave) {
     .trim();
 }
 
-// ¿La clave corresponde a alguno de los alias? Se compara sobre la versión
-// COMPACTA (sin espacios) para que cabeceras con puntuación como "N° D.N.I."
-// (-> "NDNI") o "D.N.I." (-> "DNI") coincidan con el alias "DNI". Acepta
-// igualdad exacta o "contiene" (p. ej. "DNIDELALUMNO" contiene "DNI").
-function coincideColumna(claveCompacta, alias) {
-  return alias.some((a) => {
-    const ac = a.replace(/ /g, '');
-    return claveCompacta === ac || claveCompacta.includes(ac);
-  });
-}
-
 // Dada la fila de cabecera (normalizada para mostrar), devuelve el índice de
 // columna de cada campo esperado, o -1 si no aparece.
+//
+// Se hace en dos pasadas para no equivocar de columna: PRIMERO coincidencia
+// EXACTA del nombre (así "SECCION" gana sobre "SECTOR" o "¿SEC. ASIGNADA?",
+// que solo "contienen" SEC), y LUEGO por "contiene" para lo que quede. Además,
+// una columna ya asignada a un campo no puede reutilizarse en otro.
 function detectarIndices(cabecera) {
   const compactas = cabecera.map((k) => k.replace(/ /g, ''));
   const indices = {};
+  const usados = new Set();
+
+  // Columna combinada grado+sección (ej. "GRAD/SECC"). Se detecta primero y su
+  // columna queda reservada para que no la roben GRADO ni SECCION.
+  const aliasComb = ALIAS_COMBINADA.map((a) => a.replace(/ /g, ''));
+  let comb = compactas.findIndex((k) => aliasComb.includes(k));
+  if (comb === -1) comb = compactas.findIndex((k) => aliasComb.some((ac) => k.includes(ac)));
+  indices.GRADO_SECCION = comb;
+  if (comb !== -1) usados.add(comb);
+
+  // Pasada 1: coincidencia exacta (alias === encabezado compacto).
   for (const [campo, alias] of Object.entries(ALIAS_COLUMNAS)) {
-    indices[campo] = compactas.findIndex((k) => coincideColumna(k, alias));
+    const aliasC = alias.map((a) => a.replace(/ /g, ''));
+    const i = compactas.findIndex((k, idx) => !usados.has(idx) && aliasC.includes(k));
+    indices[campo] = i;
+    if (i !== -1) usados.add(i);
   }
+
+  // Pasada 2: para los campos aún sin columna, coincidencia por "contiene".
+  for (const [campo, alias] of Object.entries(ALIAS_COLUMNAS)) {
+    if (indices[campo] !== -1) continue;
+    const aliasC = alias.map((a) => a.replace(/ /g, ''));
+    const i = compactas.findIndex((k, idx) => !usados.has(idx) && aliasC.some((ac) => k.includes(ac)));
+    indices[campo] = i;
+    if (i !== -1) usados.add(i);
+  }
+
   return indices;
+}
+
+// ¿La cabecera reconoce grado y sección? Sirve la columna combinada, o bien
+// las dos columnas separadas.
+function tieneGradoSeccion(indices) {
+  return indices.GRADO_SECCION !== -1 || (indices.GRADO !== -1 && indices.SECCION !== -1);
+}
+
+// Cuenta cuántos de los 5 campos lógicos se reconocieron (grado+sección cuenta
+// como 2, ya venga en una columna combinada o en dos separadas). Máximo 5.
+function contarCampos(indices) {
+  const base = ['DNI', 'NOMBRES', 'APELLIDOS'].filter((c) => indices[c] !== -1).length;
+  const gs =
+    indices.GRADO_SECCION !== -1 ? 2 : ['GRADO', 'SECCION'].filter((c) => indices[c] !== -1).length;
+  return base + gs;
+}
+
+// Campos que faltan (para el mensaje de error).
+function camposFaltantes(indices) {
+  const faltan = ['DNI', 'NOMBRES', 'APELLIDOS'].filter((c) => !indices || indices[c] === -1);
+  if (!indices || !tieneGradoSeccion(indices)) faltan.push('GRADO y SECCION');
+  return faltan;
 }
 
 // Recorre TODAS las hojas del libro y devuelve la mejor candidata a cabecera:
@@ -76,7 +132,7 @@ function localizarCabecera(workbook) {
       if (!Array.isArray(fila)) return;
       const cabecera = fila.map(normalizarClave);
       const indices = detectarIndices(cabecera);
-      const aciertos = COLUMNAS_ESPERADAS.filter((c) => indices[c] !== -1).length;
+      const aciertos = contarCampos(indices);
       if (aciertos > mejor.aciertos) {
         mejor = { matriz, idxCabecera: idx, indices, cabecera, aciertos };
       }
@@ -122,12 +178,12 @@ export default function ImportarExcel() {
         // columnas esperadas). Tolera títulos y espaciadores.
         const { matriz, idxCabecera, indices, cabecera, aciertos } = localizarCabecera(workbook);
 
-        const faltantes = COLUMNAS_ESPERADAS.filter((col) => !indices || indices[col] === -1);
+        const faltantes = camposFaltantes(indices);
         if (idxCabecera === -1 || faltantes.length > 0) {
           const detectada = (cabecera || []).filter(Boolean).join(', ') || '(vacía)';
           setErrorArchivo(
             aciertos <= 0
-              ? 'No se encontró una fila de cabecera con las columnas DNI, NOMBRES, APELLIDOS, GRADO y SECCION.'
+              ? 'No se encontró una fila de cabecera con las columnas DNI, NOMBRES, APELLIDOS y GRADO/SECCIÓN (separadas o combinadas en una sola columna).'
               : `Faltan columnas en el Excel: ${faltantes.join(', ')}. Cabecera detectada: ${detectada}`
           );
           setFilas([]);
@@ -143,8 +199,17 @@ export default function ImportarExcel() {
             const dni = valor(fila, 'DNI').replace(/\s+/g, '');
             const nombres = valor(fila, 'NOMBRES');
             const apellidos = valor(fila, 'APELLIDOS');
-            const grado = normalizarGrado(valor(fila, 'GRADO'));
-            const seccion = valor(fila, 'SECCION').toUpperCase();
+            // Grado y sección: de la columna combinada ("1°A") si existe, si no
+            // de las columnas separadas.
+            let grado, seccion;
+            if (indices.GRADO_SECCION !== -1) {
+              const sep = separarGradoSeccion(fila[indices.GRADO_SECCION]);
+              grado = normalizarGrado(sep.grado);
+              seccion = sep.seccion;
+            } else {
+              grado = normalizarGrado(valor(fila, 'GRADO'));
+              seccion = valor(fila, 'SECCION').toUpperCase();
+            }
 
             // Descarta filas totalmente vacías (p. ej. separadores al final).
             if (!dni && !nombres && !apellidos && !grado && !seccion) return null;
@@ -566,7 +631,9 @@ export default function ImportarExcel() {
                   </div>
                   <p className="font-body-md text-body-md text-on-surface-variant ml-2">
                     Grado del <strong className="text-on-surface">1° al 5°</strong> y sección de una sola letra
-                    (<strong className="text-on-surface">A–H</strong>), que define el turno.
+                    (<strong className="text-on-surface">A–H</strong>), que define el turno. Pueden ir en columnas
+                    separadas o <strong className="text-on-surface">juntas en una sola</strong> (ej.{' '}
+                    <strong className="text-on-surface">1°A</strong>).
                   </p>
                 </div>
               </div>
