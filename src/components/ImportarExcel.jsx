@@ -389,10 +389,8 @@ export default function ImportarExcel() {
           ))}
         </div>
 
-        {/* Top Bento Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Upload Zone */}
-          <div className="lg:col-span-2 bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm p-6 flex flex-col">
+        {/* Upload Zone */}
+        <div className="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm p-6 flex flex-col">
             <div className="flex justify-between items-start mb-4">
               <div>
                 <h3 className="font-title-lg text-title-lg text-on-surface">Cargar Archivo Excel</h3>
@@ -443,27 +441,55 @@ export default function ImportarExcel() {
             )}
           </div>
 
-          {/* Info Card: Classification Rules */}
-          <div className="bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm overflow-hidden flex flex-col">
-            <div className="bg-primary-container p-4 border-b border-outline-variant flex items-center gap-3">
-              <Icon name="rule" className="text-on-primary-container" />
-              <h3 className="font-title-md text-title-md text-on-primary-container font-semibold">
-                Reglas de Clasificación
-              </h3>
-            </div>
-            <div className="p-6 flex-1 flex flex-col gap-6 bg-surface-bright">
-              <p className="font-body-md text-body-md text-on-surface-variant">
-                El sistema asignará automáticamente el turno del estudiante basándose en su sección
-                correspondiente.
+        {/* CTA principal: siempre visible bajo la carga. Deshabilitado si aún
+            no hay datos válidos; se activa al cargar un archivo. */}
+        <div className="flex flex-col items-stretch sm:items-end gap-2">
+          {filas.some((f) => f.estado === 'error') && (
+            <p className="text-sm text-error flex items-center gap-1">
+              <Icon name="error" className="text-[16px]" />
+              {filas.filter((f) => f.estado === 'error').length} registro(s) con errores serán omitidos.
+            </p>
+          )}
+          <button
+            onClick={analizar}
+            disabled={analizando || filasValidas.length === 0}
+            className="w-full sm:w-auto bg-brand-blue text-white font-title-md text-title-md px-8 py-4 rounded-xl shadow-md hover:bg-brand-blue-dark active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Icon name="difference" />
+            {analizando
+              ? 'Comparando…'
+              : filasValidas.length === 0
+                ? 'Carga un archivo para continuar'
+                : `Comparar ${filasValidas.length} con la base de datos`}
+          </button>
+        </div>
+
+        {/* Reglas y formato del Excel — una sola tarjeta desplegable. */}
+        <details className="group bg-surface-container-lowest rounded-xl border border-outline-variant shadow-sm overflow-hidden">
+          <summary className="list-none [&::-webkit-details-marker]:hidden cursor-pointer bg-primary-container p-4 flex items-center gap-3 select-none hover:brightness-95 transition">
+            <Icon name="rule" className="text-on-primary-container" />
+            <h3 className="font-title-md text-title-md text-on-primary-container font-semibold flex-1">
+              Reglas y formato del Excel
+            </h3>
+            <span className="font-label-md text-label-md text-on-primary-container/80 hidden sm:inline">
+              Ver detalles
+            </span>
+            <Icon name="expand_more" className="details-chevron text-on-primary-container transition-transform" />
+          </summary>
+          <div className="p-6 bg-surface-bright flex flex-col gap-6">
+            {/* Clasificación por turno */}
+            <div>
+              <p className="font-body-md text-body-md text-on-surface-variant mb-3">
+                El sistema asigna automáticamente el turno del estudiante según su sección.
               </p>
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="bg-surface-container-lowest p-4 rounded-lg border border-outline-variant shadow-sm relative overflow-hidden">
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" />
-                  <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center gap-3 mb-2 ml-2">
                     <Icon name="light_mode" className="text-amber-600" />
                     <h4 className="font-title-md text-title-md text-on-surface">Turno Mañana</h4>
                   </div>
-                  <p className="font-body-md text-body-md text-on-surface-variant ml-9">
+                  <p className="font-body-md text-body-md text-on-surface-variant ml-2">
                     Secciones:{' '}
                     {['A', 'B', 'C', 'D', 'E'].map((s) => (
                       <strong key={s} className="text-on-surface bg-surface-container-high px-1.5 py-0.5 rounded mr-1">
@@ -474,11 +500,11 @@ export default function ImportarExcel() {
                 </div>
                 <div className="bg-surface-container-lowest p-4 rounded-lg border border-outline-variant shadow-sm relative overflow-hidden">
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-indigo-500" />
-                  <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center gap-3 mb-2 ml-2">
                     <Icon name="dark_mode" className="text-indigo-600" />
                     <h4 className="font-title-md text-title-md text-on-surface">Turno Tarde</h4>
                   </div>
-                  <p className="font-body-md text-body-md text-on-surface-variant ml-9">
+                  <p className="font-body-md text-body-md text-on-surface-variant ml-2">
                     Secciones:{' '}
                     {['F', 'G', 'H'].map((s) => (
                       <strong key={s} className="text-on-surface bg-surface-container-high px-1.5 py-0.5 rounded mr-1">
@@ -489,8 +515,64 @@ export default function ImportarExcel() {
                 </div>
               </div>
             </div>
+
+            {/* Formato del archivo */}
+            <div>
+              <h4 className="font-title-md text-title-md text-on-surface mb-3 flex items-center gap-2">
+                <Icon name="table_chart" className="text-primary text-[20px]" /> Formato del archivo
+              </h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-surface-container-lowest p-4 rounded-lg border border-outline-variant shadow-sm relative overflow-hidden">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary" />
+                  <div className="flex items-center gap-2 mb-2 ml-2">
+                    <Icon name="view_column" className="text-primary text-[20px]" />
+                    <h4 className="font-title-md text-title-md text-on-surface">Columnas obligatorias</h4>
+                  </div>
+                  <p className="font-body-md text-body-md text-on-surface-variant ml-2">
+                    El archivo debe tener estas columnas (en cualquier orden):
+                  </p>
+                  <div className="flex flex-wrap gap-1 mt-2 ml-2">
+                    {['DNI', 'NOMBRES', 'APELLIDOS', 'GRADO', 'SECCION'].map((c) => (
+                      <strong
+                        key={c}
+                        className="text-on-surface bg-surface-container-high px-1.5 py-0.5 rounded font-label-md text-label-md"
+                      >
+                        {c}
+                      </strong>
+                    ))}
+                  </div>
+                  <p className="font-label-md text-label-md text-on-surface-variant/80 mt-2 ml-2">
+                    Se aceptan variantes en el encabezado (p. ej. «Código», «Sección», «Año», «N° DNI»).
+                  </p>
+                </div>
+
+                <div className="bg-surface-container-lowest p-4 rounded-lg border border-outline-variant shadow-sm relative overflow-hidden">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-secondary" />
+                  <div className="flex items-center gap-2 mb-2 ml-2">
+                    <Icon name="badge" className="text-secondary text-[20px]" />
+                    <h4 className="font-title-md text-title-md text-on-surface">DNI o código</h4>
+                  </div>
+                  <p className="font-body-md text-body-md text-on-surface-variant ml-2">
+                    DNI de <strong className="text-on-surface">8 dígitos</strong>; si el identificador es más largo se
+                    toma como <strong className="text-on-surface">código</strong>. Sin espacios, puntos ni guiones.
+                  </p>
+                </div>
+
+                <div className="bg-surface-container-lowest p-4 rounded-lg border border-outline-variant shadow-sm relative overflow-hidden">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500" />
+                  <div className="flex items-center gap-2 mb-2 ml-2">
+                    <Icon name="school" className="text-amber-600 text-[20px]" />
+                    <h4 className="font-title-md text-title-md text-on-surface">Grado y sección</h4>
+                  </div>
+                  <p className="font-body-md text-body-md text-on-surface-variant ml-2">
+                    Grado del <strong className="text-on-surface">1° al 5°</strong> y sección de una sola letra
+                    (<strong className="text-on-surface">A–H</strong>), que define el turno.
+                  </p>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
+        </details>
 
         {/* Preview Section */}
         {filas.length > 0 && (
@@ -685,26 +767,6 @@ export default function ImportarExcel() {
                 </button>
               </div>
             </div>
-          </div>
-        )}
-
-        {/* Primary CTA */}
-        {filas.length > 0 && (
-          <div className="mt-4 mb-6 md:mb-8 flex flex-col items-end gap-2">
-            {filas.some((f) => f.estado === 'error') && (
-              <p className="text-sm text-error flex items-center gap-1">
-                <Icon name="error" className="text-[16px]" />
-                {filas.filter((f) => f.estado === 'error').length} registro(s) con errores serán omitidos.
-              </p>
-            )}
-            <button
-              onClick={analizar}
-              disabled={analizando || filasValidas.length === 0}
-              className="w-full md:w-auto bg-brand-blue text-white font-title-md text-title-md px-8 py-4 rounded-xl shadow-md hover:bg-brand-blue-dark active:scale-[0.98] transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-            >
-              <Icon name="difference" />
-              {analizando ? 'Comparando…' : `Comparar ${filasValidas.length} con la base de datos`}
-            </button>
           </div>
         )}
 

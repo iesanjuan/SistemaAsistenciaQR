@@ -68,7 +68,6 @@ export default function ReportesAuxiliar() {
 
   const [filas, setFilas] = useState([]);
   const [auxiliares, setAuxiliares] = useState([]);
-  const [tardanzasRaw, setTardanzasRaw] = useState([]);
   const [marcaciones, setMarcaciones] = useState([]); // marcaciones reales (con hora)
   const [cargando, setCargando] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -77,6 +76,8 @@ export default function ReportesAuxiliar() {
   const [detalle, setDetalle] = useState(null);
   // Filtro de grado+sección DENTRO del modal ('' = todas).
   const [detalleFiltro, setDetalleFiltro] = useState('');
+  // Alumno cuyo detalle de días de tardanza se muestra en un modal. null = ninguno.
+  const [alumnoDetalle, setAlumnoDetalle] = useState(null);
   // Justificaciones (anotaciones de tardanza/falta) del rango.
   const [justificaciones, setJustificaciones] = useState([]);
   // Diálogo de justificación: null | { estudiante_id, nombre, fecha, tipo }.
@@ -92,9 +93,10 @@ export default function ReportesAuxiliar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [perfil]);
 
-  // Al abrir/cambiar el modal, se limpia el filtro de grado/sección.
+  // Al abrir/cambiar el modal, se limpia el filtro y el detalle del alumno.
   useEffect(() => {
     setDetalleFiltro('');
+    setAlumnoDetalle(null);
   }, [detalle]);
 
   // Auto-refresco silencioso cada 30 s: trae marcaciones nuevas sin que el
@@ -121,7 +123,7 @@ export default function ReportesAuxiliar() {
     if (!silencioso) setCargando(true);
     setErrorMsg('');
 
-    const [reporte, porDia, marc] = await Promise.all([
+    const [reporte, marc] = await Promise.all([
       // Se trae TODO el rango (sin filtrar turno) y el filtrado por turno /
       // auxiliar se hace del lado del cliente, para que cambiar de filtro
       // sea instantáneo sin volver a consultar la base.
@@ -130,7 +132,6 @@ export default function ReportesAuxiliar() {
         p_fecha_fin: fin,
         p_turno: null,
       }),
-      cargarTardanzasRaw(inicio, fin),
       cargarMarcaciones(inicio, fin),
     ]);
 
@@ -144,7 +145,6 @@ export default function ReportesAuxiliar() {
       return;
     }
     setFilas(reporte.data || []);
-    setTardanzasRaw(porDia);
     setMarcaciones(marc);
     setJustificaciones(await cargarJustificaciones(inicio, fin));
   }
@@ -218,16 +218,6 @@ export default function ReportesAuxiliar() {
     return data || [];
   }
 
-  async function cargarTardanzasRaw(inicio = fechaInicio, fin = fechaFin) {
-    const { data } = await supabase
-      .from('asistencias')
-      .select('fecha, estudiantes!inner(turno, grado, seccion)')
-      .eq('estado', 'TARDE')
-      .gte('fecha', inicio)
-      .lte('fecha', fin);
-    return data || [];
-  }
-
   // Conjunto de secciones "grado|seccion" del auxiliar seleccionado (o null = todas).
   const seccionesAux = useMemo(() => {
     if (!auxiliarSel) return null;
@@ -249,32 +239,81 @@ export default function ReportesAuxiliar() {
     });
   }, [filas, filtroTurno, seccionesAux]);
 
+  // ── Justificaciones y conteos efectivos ──────────────────────────────────
+  // Justificaciones indexadas por "estudiante_id|fecha".
+  const justMap = useMemo(() => {
+    const m = new Map();
+    justificaciones.forEach((j) => m.set(`${j.estudiante_id}|${j.fecha}`, j));
+    return m;
+  }, [justificaciones]);
+
+  // Justificaciones de FALTA por alumno (ordenadas por fecha). Cada una
+  // descuenta una falta del conteo.
+  const justFaltasPorEstudiante = useMemo(() => {
+    const m = {};
+    justificaciones.forEach((j) => {
+      if (j.tipo !== 'FALTA') return;
+      (m[j.estudiante_id] ||= []).push(j);
+    });
+    Object.values(m).forEach((arr) => arr.sort((a, b) => a.fecha.localeCompare(b.fecha)));
+    return m;
+  }, [justificaciones]);
+
+  // Justificaciones de TARDANZA por alumno. Una tardanza justificada deja de
+  // contar como tarde y pasa a contar como "asistió temprano".
+  const justTardePorEstudiante = useMemo(() => {
+    const m = {};
+    justificaciones.forEach((j) => {
+      if (j.tipo !== 'TARDE') return;
+      (m[j.estudiante_id] ||= []).push(j);
+    });
+    Object.values(m).forEach((arr) => arr.sort((a, b) => a.fecha.localeCompare(b.fecha)));
+    return m;
+  }, [justificaciones]);
+
+  // Faltas efectivas = faltas del rango menos las justificadas.
+  const faltasEfectivas = (f) =>
+    Math.max(0, Number(f.total_falta || 0) - (justFaltasPorEstudiante[f.estudiante_id]?.length || 0));
+  // Nº de tardanzas justificadas (acotado a las tardanzas reales del alumno).
+  const nJustTarde = (f) =>
+    Math.min(Number(f.total_tarde || 0), justTardePorEstudiante[f.estudiante_id]?.length || 0);
+  // Tardanzas efectivas = tardanzas menos las justificadas.
+  const tardanzasEfectivas = (f) => Number(f.total_tarde || 0) - nJustTarde(f);
+  // Asistencias efectivas = puntuales + las tardanzas justificadas (pasan a puntual).
+  const asistioEfectivas = (f) => Number(f.total_asistio || 0) + nJustTarde(f);
+
+  // Tardanzas por día (para el gráfico), acotadas a los alumnos visibles y
+  // excluyendo las tardanzas justificadas (que pasan a contar como puntuales).
   const tardanzasPorDia = useMemo(() => {
+    const visibles = new Set(filasVisibles.map((f) => f.estudiante_id));
     const conteo = {};
-    tardanzasRaw.forEach((r) => {
-      if (filtroTurno !== 'CONSOLIDADO' && r.estudiantes.turno !== filtroTurno) return;
-      if (seccionesAux && !seccionesAux.has(claveGradoSeccion(r.estudiantes.grado, r.estudiantes.seccion))) return;
+    marcaciones.forEach((r) => {
+      if (r.estado !== 'TARDE') return;
+      if (!visibles.has(r.estudiante_id)) return;
+      if (justMap.has(`${r.estudiante_id}|${r.fecha}`)) return; // justificada → no cuenta
       conteo[r.fecha] = (conteo[r.fecha] || 0) + 1;
     });
     return conteo;
-  }, [tardanzasRaw, filtroTurno, seccionesAux]);
+  }, [marcaciones, filasVisibles, justMap]);
 
   const ranking = useMemo(
-    () => [...filasVisibles].sort((a, b) => b.total_tarde - a.total_tarde).slice(0, 10),
-    [filasVisibles]
+    () => [...filasVisibles].sort((a, b) => tardanzasEfectivas(b) - tardanzasEfectivas(a)).slice(0, 10),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filasVisibles, justTardePorEstudiante]
   );
 
   const consolidado = useMemo(() => {
     return filasVisibles.reduce(
       (acc, f) => {
-        acc.asistio += Number(f.total_asistio) || 0;
-        acc.tarde += Number(f.total_tarde) || 0;
+        acc.asistio += asistioEfectivas(f);
+        acc.tarde += tardanzasEfectivas(f);
         acc.falta += Number(f.total_falta) || 0;
         return acc;
       },
       { asistio: 0, tarde: 0, falta: 0 }
     );
-  }, [filasVisibles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filasVisibles, justTardePorEstudiante]);
 
   const porcentajeAsistencia = useMemo(() => {
     const total = consolidado.asistio + consolidado.tarde + consolidado.falta;
@@ -298,39 +337,25 @@ export default function ReportesAuxiliar() {
   //  - asistieron = marcó PUNTUAL al menos una vez.
   //  - tardanzas  = marcó TARDE al menos una vez.
   //  - faltones   = no marcó nunca (posibles ausentes).
+  // Orden: grado 1° → 5°, luego sección (A, B, C…), luego apellidos/nombres.
   const ordenar = (lista) =>
-    [...lista].sort((a, b) => `${a.apellidos} ${a.nombres}`.localeCompare(`${b.apellidos} ${b.nombres}`, 'es'));
+    [...lista].sort(
+      (a, b) =>
+        gradoNumero(a.grado) - gradoNumero(b.grado) ||
+        String(a.seccion).localeCompare(String(b.seccion), 'es') ||
+        `${a.apellidos} ${a.nombres}`.localeCompare(`${b.apellidos} ${b.nombres}`, 'es')
+    );
 
   const asistieronLista = useMemo(
-    () => ordenar(filasVisibles.filter((f) => Number(f.total_asistio) > 0)),
-    [filasVisibles]
+    () => ordenar(filasVisibles.filter((f) => asistioEfectivas(f) > 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filasVisibles, justTardePorEstudiante]
   );
   const tardanzasLista = useMemo(
-    () => ordenar(filasVisibles.filter((f) => Number(f.total_tarde) > 0)),
-    [filasVisibles]
+    () => ordenar(filasVisibles.filter((f) => tardanzasEfectivas(f) > 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filasVisibles, justTardePorEstudiante]
   );
-  // Justificaciones indexadas por "estudiante_id|fecha".
-  const justMap = useMemo(() => {
-    const m = new Map();
-    justificaciones.forEach((j) => m.set(`${j.estudiante_id}|${j.fecha}`, j));
-    return m;
-  }, [justificaciones]);
-
-  // Justificaciones de FALTA por alumno (ordenadas por fecha). Cada una
-  // descuenta una falta del conteo.
-  const justFaltasPorEstudiante = useMemo(() => {
-    const m = {};
-    justificaciones.forEach((j) => {
-      if (j.tipo !== 'FALTA') return;
-      (m[j.estudiante_id] ||= []).push(j);
-    });
-    Object.values(m).forEach((arr) => arr.sort((a, b) => a.fecha.localeCompare(b.fecha)));
-    return m;
-  }, [justificaciones]);
-
-  // Faltas efectivas = faltas del rango menos las justificadas.
-  const faltasEfectivas = (f) =>
-    Math.max(0, Number(f.total_falta || 0) - (justFaltasPorEstudiante[f.estudiante_id]?.length || 0));
 
   // Posibles faltas = alumnos que aún tienen faltas efectivas (>0).
   const faltonesLista = useMemo(
@@ -356,6 +381,18 @@ export default function ReportesAuxiliar() {
     return m;
   }, [marcaciones]);
 
+  // Días en que cada alumno llegó TARDE (fecha + hora), ordenados por fecha.
+  // Se usa para desplegar el detalle al tocar un alumno en consultas de rango.
+  const tardanzasDiasPorEstudiante = useMemo(() => {
+    const m = {};
+    marcaciones.forEach((r) => {
+      if (r.estado !== 'TARDE') return;
+      (m[r.estudiante_id] ||= []).push({ fecha: r.fecha, hora: r.hora_ingreso });
+    });
+    Object.values(m).forEach((arr) => arr.sort((a, b) => a.fecha.localeCompare(b.fecha)));
+    return m;
+  }, [marcaciones]);
+
   const barrasDiarias = useMemo(() => {
     const fechas = Object.keys(tardanzasPorDia).sort().slice(-5);
     const max = Math.max(1, ...fechas.map((f) => tardanzasPorDia[f]));
@@ -368,25 +405,31 @@ export default function ReportesAuxiliar() {
   }, [tardanzasPorDia]);
 
   const distribucion = useMemo(() => {
-    const manana = filasVisibles.filter((f) => f.turno === 'MANANA').reduce((s, f) => s + Number(f.total_tarde), 0);
-    const tarde = filasVisibles.filter((f) => f.turno === 'TARDE').reduce((s, f) => s + Number(f.total_tarde), 0);
+    const manana = filasVisibles.filter((f) => f.turno === 'MANANA').reduce((s, f) => s + tardanzasEfectivas(f), 0);
+    const tarde = filasVisibles.filter((f) => f.turno === 'TARDE').reduce((s, f) => s + tardanzasEfectivas(f), 0);
     const total = manana + tarde;
     return {
       total,
       pctManana: total === 0 ? 0 : Math.round((manana / total) * 100),
       pctTarde: total === 0 ? 0 : Math.round((tarde / total) * 100),
     };
-  }, [filasVisibles]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filasVisibles, justTardePorEstudiante]);
 
   const nombreAuxSel = auxiliares.find((a) => a.id === auxiliarSel)?.nombres || '';
 
-  // Texto distintivo de justificación para el Excel (solo aplica a un día).
-  // Ej.: "Falta justificada: cita médica". Vacío si no tiene justificación.
+  // Texto de justificación para el Excel (faltas y tardanzas). En un día:
+  // "Falta justificada: cita médica"; en rango, lista "dd/mm (tipo): motivo".
   function textoJustificacion(f) {
-    const arr = justFaltasPorEstudiante[f.estudiante_id] || [];
+    const arr = justificaciones
+      .filter((j) => j.estudiante_id === f.estudiante_id)
+      .sort((a, b) => a.fecha.localeCompare(b.fecha));
     if (!arr.length) return '';
-    if (fechaInicio === fechaFin) return `Falta justificada: ${arr[0].motivo}`;
-    return arr.map((j) => `${j.fecha.slice(8, 10)}/${j.fecha.slice(5, 7)}: ${j.motivo}`).join('; ');
+    const etiqueta = (j) => (j.tipo === 'FALTA' ? 'Falta' : 'Tardanza');
+    if (fechaInicio === fechaFin) return `${etiqueta(arr[0])} justificada: ${arr[0].motivo}`;
+    return arr
+      .map((j) => `${j.fecha.slice(8, 10)}/${j.fecha.slice(5, 7)} (${etiqueta(j).toLowerCase()}): ${j.motivo}`)
+      .join('; ');
   }
 
   function exportarExcel(soloTurno) {
@@ -403,8 +446,9 @@ export default function ReportesAuxiliar() {
       Grado: f.grado,
       Sección: f.seccion,
       Turno: f.turno,
-      Asistencias: f.total_asistio,
-      Tardanzas: f.total_tarde,
+      Asistencias: asistioEfectivas(f),
+      Tardanzas: tardanzasEfectivas(f),
+      'Tardanzas justificadas': nJustTarde(f),
       Faltas: faltasEfectivas(f),
       'Faltas justificadas': justFaltasPorEstudiante[f.estudiante_id]?.length || 0,
       'Días evaluados': f.total_dias,
@@ -433,8 +477,9 @@ export default function ReportesAuxiliar() {
         Sección: f.seccion,
         Turno: f.turno,
         'Hora de llegada': hora ? formatearHoraDesdeTexto(hora) : '',
-        Asistencias: f.total_asistio,
-        Tardanzas: f.total_tarde,
+        Asistencias: asistioEfectivas(f),
+        Tardanzas: tardanzasEfectivas(f),
+        'Tardanzas justificadas': nJustTarde(f),
         Faltas: faltasEfectivas(f),
         'Faltas justificadas': justFaltasPorEstudiante[f.estudiante_id]?.length || 0,
         Justificación: textoJustificacion(f),
@@ -556,7 +601,7 @@ export default function ReportesAuxiliar() {
         <button
           type="button"
           onClick={() => asistieronLista.length && setDetalle('asistieron')}
-          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-primary hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="text-left bg-surface-container-lowest rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-primary hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <div className="flex justify-between items-start mb-4">
             <h3 className="font-title-md text-title-md text-on-surface">Asistió temprano</h3>
@@ -582,7 +627,7 @@ export default function ReportesAuxiliar() {
         <button
           type="button"
           onClick={() => tardanzasLista.length && setDetalle('tardanzas')}
-          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-error hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="text-left bg-surface-container-lowest rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-error hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <div className="flex justify-between items-start mb-4">
             <h3 className="font-title-md text-title-md text-on-surface">Asistió tarde</h3>
@@ -620,7 +665,7 @@ export default function ReportesAuxiliar() {
         <button
           type="button"
           onClick={() => faltonesLista.length && setDetalle('faltones')}
-          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-amber-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="text-left bg-surface-container-lowest rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-amber-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <div className="flex justify-between items-start mb-4">
             <h3 className="font-title-md text-title-md text-on-surface">Posibles faltas</h3>
@@ -646,7 +691,7 @@ export default function ReportesAuxiliar() {
         <button
           type="button"
           onClick={() => justificadosLista.length && setDetalle('justificados')}
-          className="text-left bg-surface rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-green-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          className="text-left bg-surface-container-lowest rounded-xl p-6 border border-outline-variant elevation-1 elevation-interactive transition-all border-t-4 border-t-green-500 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         >
           <div className="flex justify-between items-start mb-4">
             <h3 className="font-title-md text-title-md text-on-surface">Justificados</h3>
@@ -766,8 +811,8 @@ export default function ReportesAuxiliar() {
                       </span>
                     </td>
                     <td className="py-3 px-6 text-center">
-                      <span className={`font-title-md ${f.total_tarde > 0 ? 'text-error' : 'text-on-surface'}`}>
-                        {f.total_tarde}
+                      <span className={`font-title-md ${tardanzasEfectivas(f) > 0 ? 'text-error' : 'text-on-surface'}`}>
+                        {tardanzasEfectivas(f)}
                       </span>
                     </td>
                   </tr>
@@ -883,11 +928,20 @@ export default function ReportesAuxiliar() {
             ? lista.filter((f) => `${f.grado}|${f.seccion}` === detalleFiltro)
             : lista;
           return (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-              <div className="absolute inset-0 bg-black/40" onClick={() => setDetalle(null)} />
-              <div className="relative bg-surface rounded-2xl border border-outline-variant shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-                <div className="p-5 border-b border-outline-variant flex justify-between items-center bg-surface-container-lowest rounded-t-2xl">
-                  <div className="min-w-0">
+            // Deja libre el sidebar/riel fijo del Shell (md:20, lg:280px) para
+            // que la navegación lateral siga visible. En móvil ocupa todo.
+            <div className="fixed inset-0 z-50 md:left-20 lg:left-[280px] bg-surface flex flex-col">
+              {/* Barra superior: botón volver + título. */}
+              <div className="border-b border-outline-variant bg-surface-container-lowest shrink-0">
+                <div className="max-w-3xl mx-auto w-full px-4 py-3 flex items-center gap-3">
+                  <button
+                    onClick={() => setDetalle(null)}
+                    title="Volver"
+                    className="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors shrink-0"
+                  >
+                    <Icon name="arrow_back" />
+                  </button>
+                  <div className="min-w-0 flex-1">
                     <h3 className="font-title-lg text-title-lg text-on-surface flex items-center gap-2">
                       <Icon name={cfg.icon} className={cfg.color} />
                       {cfg.titulo}
@@ -898,17 +952,12 @@ export default function ReportesAuxiliar() {
                       {listaFiltrada.length === 1 ? 'alumno' : 'alumnos'} · {rangoLabel}
                     </p>
                   </div>
-                  <button
-                    onClick={() => setDetalle(null)}
-                    title="Cerrar"
-                    className="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors shrink-0"
-                  >
-                    <Icon name="close" />
-                  </button>
                 </div>
+              </div>
 
-                {/* Filtro rápido por grado y sección dentro del modal. */}
-                <div className="px-4 pt-3 pb-1 border-b border-outline-variant">
+              {/* Filtro rápido por grado y sección. */}
+              <div className="border-b border-outline-variant shrink-0">
+                <div className="max-w-3xl mx-auto w-full px-4 pt-3 pb-3">
                   <label className="block font-label-md text-label-md text-on-surface-variant mb-1">
                     Grado y sección
                   </label>
@@ -925,15 +974,30 @@ export default function ReportesAuxiliar() {
                     ))}
                   </select>
                 </div>
+              </div>
 
-                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
+              <div className="flex-1 overflow-y-auto">
+                <div className="max-w-3xl mx-auto w-full p-4 flex flex-col gap-2">
                   {listaFiltrada.length === 0 && (
                     <p className="text-center text-on-surface-variant py-8">Sin alumnos para mostrar.</p>
                   )}
-                  {listaFiltrada.map((f) => (
+                  {listaFiltrada.map((f) => {
+                    const diasTarde = tardanzasDiasPorEstudiante[f.estudiante_id] || [];
+                    // En "Asistió tarde" (y en "Asistió temprano" cuando el alumno
+                    // tiene tardanzas justificadas) se puede tocar al alumno para
+                    // ver/justificar en un modal los días que llegó tarde.
+                    const verDetalle =
+                      (detalle === 'tardanzas' || detalle === 'asistieron') && diasTarde.length > 0;
+                    return (
                     <div
                       key={f.estudiante_id}
-                      className="flex items-center gap-3 p-3 rounded-lg border border-outline-variant bg-surface-container-lowest"
+                      className="rounded-lg border border-outline-variant bg-surface-container-lowest overflow-hidden"
+                    >
+                    <div
+                      className={`flex items-center gap-3 p-3 ${
+                        verDetalle ? 'cursor-pointer hover:bg-surface-container transition-colors' : ''
+                      }`}
+                      onClick={verDetalle ? () => setAlumnoDetalle({ ...f, dias: diasTarde }) : undefined}
                     >
                       <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs bg-surface-variant text-on-surface-variant shrink-0">
                         {iniciales(f.nombres, f.apellidos)}
@@ -981,35 +1045,35 @@ export default function ReportesAuxiliar() {
                       {detalle === 'asistieron' && (
                         <div className="shrink-0 flex gap-1.5 font-label-md text-label-md">
                           <span className="text-blue-700 bg-blue-50 rounded px-2 py-0.5 whitespace-nowrap">
-                            {f.total_asistio} puntual
+                            {asistioEfectivas(f)} puntual
                           </span>
-                          {Number(f.total_tarde) > 0 && (
+                          {tardanzasEfectivas(f) > 0 && (
                             <span className="text-red-700 bg-red-50 rounded px-2 py-0.5 whitespace-nowrap">
-                              {f.total_tarde} tarde
+                              {tardanzasEfectivas(f)} tarde
                             </span>
                           )}
                         </div>
                       )}
-                      {(detalle === 'tardanzas' || detalle === 'faltones') &&
+                      {/* Tardanzas: solo el conteo (efectivo). Justificar se hace
+                          dentro del modal de detalle, por cada día. */}
+                      {detalle === 'tardanzas' && (
+                        <span className="shrink-0 text-red-700 bg-red-50 border border-red-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
+                          {tardanzasEfectivas(f)} {tardanzasEfectivas(f) === 1 ? 'tardanza' : 'tardanzas'}
+                        </span>
+                      )}
+                      {detalle === 'faltones' &&
                         (() => {
-                          const tipoJ = detalle === 'tardanzas' ? 'TARDE' : 'FALTA';
                           const just = esUnDia ? justMap.get(`${f.estudiante_id}|${fechaInicio}`) : null;
                           const tieneEnRango =
                             !esUnDia && justificaciones.some((j) => j.estudiante_id === f.estudiante_id);
                           return (
                             <div className="shrink-0 flex flex-col items-end gap-1">
-                              {detalle === 'faltones' ? (
-                                <span className="text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
-                                  {faltasEfectivas(f)} {faltasEfectivas(f) === 1 ? 'falta' : 'faltas'}
-                                </span>
-                              ) : (
-                                <span className="text-red-700 bg-red-50 border border-red-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
-                                  {f.total_tarde} {Number(f.total_tarde) === 1 ? 'tardanza' : 'tardanzas'}
-                                </span>
-                              )}
+                              <span className="text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 font-label-md text-label-md whitespace-nowrap">
+                                {faltasEfectivas(f)} {faltasEfectivas(f) === 1 ? 'falta' : 'faltas'}
+                              </span>
                               {just ? (
                                 <button
-                                  onClick={() => abrirJustificar(f, tipoJ, fechaInicio, just.motivo)}
+                                  onClick={() => abrirJustificar(f, 'FALTA', fechaInicio, just.motivo)}
                                   title={`Justificado: ${just.motivo} (toca para editar)`}
                                   className="text-green-700 bg-green-50 border border-green-200 rounded-full px-2.5 py-0.5 font-label-md text-label-md flex items-center gap-1 hover:bg-green-100 transition-colors"
                                 >
@@ -1017,7 +1081,7 @@ export default function ReportesAuxiliar() {
                                 </button>
                               ) : esUnDia ? (
                                 <button
-                                  onClick={() => abrirJustificar(f, tipoJ, fechaInicio, '')}
+                                  onClick={() => abrirJustificar(f, 'FALTA', fechaInicio, '')}
                                   className="text-primary border border-primary/40 rounded-full px-2.5 py-0.5 font-label-md text-label-md flex items-center gap-1 hover:bg-primary/10 transition-colors"
                                 >
                                   <Icon name="edit_note" className="text-[16px]" /> Justificar
@@ -1048,11 +1112,18 @@ export default function ReportesAuxiliar() {
                           )}
                         </div>
                       )}
+                      {verDetalle && (
+                        <Icon name="chevron_right" className="shrink-0 text-on-surface-variant" />
+                      )}
                     </div>
-                  ))}
+                    </div>
+                    );
+                  })}
                 </div>
+              </div>
 
-                <div className="p-3 border-t border-outline-variant flex justify-end rounded-b-2xl">
+              <div className="border-t border-outline-variant bg-surface-container-lowest shrink-0">
+                <div className="max-w-3xl mx-auto w-full p-3 flex justify-end">
                   <button
                     onClick={() => exportarLista(listaFiltrada, detalle)}
                     disabled={listaFiltrada.length === 0}
@@ -1065,6 +1136,77 @@ export default function ReportesAuxiliar() {
             </div>
           );
         })()}
+
+      {/* Modal: días en que un alumno llegó tarde (al tocarlo en la lista). */}
+      {alumnoDetalle && (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setAlumnoDetalle(null)} />
+          <div className="relative bg-surface rounded-2xl border border-outline-variant shadow-2xl w-full max-w-md max-h-[80vh] flex flex-col">
+            <div className="p-5 border-b border-outline-variant flex justify-between items-start gap-3 bg-surface-container-lowest rounded-t-2xl">
+              <div className="min-w-0">
+                <h3 className="font-title-lg text-title-lg text-on-surface truncate">
+                  {alumnoDetalle.apellidos}, {alumnoDetalle.nombres}
+                </h3>
+                <p className="font-label-md text-label-md text-on-surface-variant mt-0.5">
+                  {alumnoDetalle.grado} "{alumnoDetalle.seccion}" ·{' '}
+                  {alumnoDetalle.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
+                </p>
+                <p className="font-label-md text-label-md text-error flex items-center gap-1 mt-1">
+                  <Icon name="schedule" className="text-[16px]" />
+                  Llegó tarde {alumnoDetalle.dias.length} {alumnoDetalle.dias.length === 1 ? 'día' : 'días'}
+                </p>
+              </div>
+              <button
+                onClick={() => setAlumnoDetalle(null)}
+                title="Cerrar"
+                className="p-2 rounded-full text-on-surface-variant hover:bg-surface-container-high hover:text-primary transition-colors shrink-0"
+              >
+                <Icon name="close" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-1.5">
+              {alumnoDetalle.dias.map((d) => {
+                const j = justMap.get(`${alumnoDetalle.estudiante_id}|${d.fecha}`);
+                return (
+                  <div
+                    key={d.fecha}
+                    className="rounded-lg bg-surface-container-lowest px-3 py-2 border border-outline-variant"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-body-md text-body-md text-on-surface capitalize">{fechaConDia(d.fecha)}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {d.hora && (
+                          <span className="font-label-md text-label-md text-red-700 flex items-center gap-1 whitespace-nowrap">
+                            <Icon name="schedule" className="text-[14px]" /> {formatearHoraDesdeTexto(d.hora)}
+                          </span>
+                        )}
+                        <button
+                          onClick={() => abrirJustificar(alumnoDetalle, 'TARDE', d.fecha, j?.motivo)}
+                          title={j ? `Justificado: ${j.motivo} (toca para editar)` : 'Justificar esta tardanza'}
+                          className={
+                            j
+                              ? 'text-green-700 bg-green-50 border border-green-200 rounded-full px-2.5 py-0.5 font-label-md text-label-md flex items-center gap-1 hover:bg-green-100 transition-colors'
+                              : 'text-primary border border-primary/40 rounded-full px-2.5 py-0.5 font-label-md text-label-md flex items-center gap-1 hover:bg-primary/10 transition-colors'
+                          }
+                        >
+                          <Icon name={j ? 'verified' : 'edit_note'} className="text-[16px]" />
+                          {j ? 'Justificado' : 'Justificar'}
+                        </button>
+                      </div>
+                    </div>
+                    {j && (
+                      <p className="mt-1 font-label-md text-label-md text-green-700 flex items-start gap-1">
+                        <Icon name="verified" className="text-[14px] mt-0.5" />
+                        <span>{j.motivo}</span>
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Diálogo para escribir/editar la justificación (encima del modal). */}
       {justificando && (

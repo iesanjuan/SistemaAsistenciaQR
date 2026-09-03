@@ -91,12 +91,113 @@
   transition: opacity 0.3s ease-in-out, transform 0.3s ease-out;
 }
 
+/* --------------------------------------------------------------------------
+   Diseño sin bordes.
+   En todo el sistema se quitan los bordes grises (outline / outline-variant)
+   y los contenedores se diferencian con una sombra suave. Se conservan los
+   bordes punteados (p. ej. la zona de arrastre para importar) y los bordes
+   de color con intención (error, foco, acentos superiores de color).
+   -------------------------------------------------------------------------- */
+.border-outline-variant:not(.border-dashed),
+.border-outline:not(.border-dashed) {
+  border-color: transparent !important;
+}
+
+/* Se conservan los acentos superiores de color de las tarjetas (franja de
+   color), que conviven con el borde gris que sí se elimina. */
+.border-outline-variant.border-t-amber-500 {
+  border-top-color: #f59e0b !important;
+}
+.border-outline-variant.border-t-green-500 {
+  border-top-color: #22c55e !important;
+}
+.border-outline-variant.border-t-primary {
+  border-top-color: #264796 !important;
+}
+.border-outline-variant.border-t-error {
+  border-top-color: #ba1a1a !important;
+}
+
+/* Sombra suave para las tarjetas/paneles (contenedores grandes redondeados que
+   antes se delimitaban con un borde gris). Se excluyen los que ya usan una
+   sombra fuerte propia (modales, menús con shadow-md/lg/2xl). */
+:is(.rounded-xl, .rounded-2xl).border-outline-variant:not(.border-dashed):not(.shadow-md):not(.shadow-lg):not(.shadow-2xl) {
+  box-shadow: 0 1px 2px rgba(11, 28, 48, 0.06), 0 6px 16px -8px rgba(11, 28, 48, 0.14);
+}
+
+/* Campos de formulario: sin borde visible, pero con una sombra sutil que marca
+   el campo (si no, los inputs con fondo igual al de la página desaparecerían).
+   Al enfocar, el anillo/color de foco (mayor especificidad) toma el relevo. */
+input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+select,
+textarea {
+  box-shadow: inset 0 0 0 1px rgba(11, 28, 48, 0.12);
+}
+
+/* Checkboxes y radios con borde visible (los nativos se pierden sin borde).
+   Estilo propio consistente: borde suave, y al marcar se rellenan en azul. */
+input[type='checkbox'],
+input[type='radio'] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  flex-shrink: 0;
+  background: #fff;
+  border-radius: 0.3rem;
+  box-shadow: inset 0 0 0 1.5px rgba(11, 28, 48, 0.45);
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+input[type='radio'] {
+  border-radius: 9999px;
+}
+input[type='checkbox']:checked,
+input[type='radio']:checked {
+  background: #264796;
+  box-shadow: inset 0 0 0 1.5px #264796;
+}
+input[type='checkbox']:checked::after {
+  content: '';
+  display: block;
+  width: 0.3rem;
+  height: 0.58rem;
+  margin: 0.06rem auto 0;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+input[type='radio']:checked::after {
+  content: '';
+  display: block;
+  width: 0.5rem;
+  height: 0.5rem;
+  margin: 0.28rem auto;
+  border-radius: 9999px;
+  background: #fff;
+}
+input[type='checkbox']:focus-visible,
+input[type='radio']:focus-visible {
+  outline: 2px solid #264796;
+  outline-offset: 2px;
+}
+input[type='checkbox']:disabled,
+input[type='radio']:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Chevron de las tarjetas desplegables (<details>): gira al abrir. */
+details[open] .details-chevron {
+  transform: rotate(180deg);
+}
+
 .elevation-1 {
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 1px 2px rgba(11, 28, 48, 0.06), 0 6px 16px -8px rgba(11, 28, 48, 0.14);
 }
 
 .elevation-interactive:hover {
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 2px 6px rgba(11, 28, 48, 0.08), 0 12px 24px -10px rgba(11, 28, 48, 0.18);
   transform: translateY(-1px);
 }
 
