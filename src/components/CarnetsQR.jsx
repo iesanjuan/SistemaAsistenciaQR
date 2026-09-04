@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../lib/supabaseClient';
 import { useUI } from '../lib/UIContext';
@@ -57,6 +57,69 @@ function compararEstudiantes(a, b) {
   if (sa !== sb) return sa.localeCompare(sb, 'es');
   return `${a.apellidos} ${a.nombres}`.localeCompare(`${b.apellidos} ${b.nombres}`, 'es');
 }
+
+// Tarjeta de carnet memoizada: solo se re-renderiza si cambia el alumno o su
+// estado de "marcado". Así, marcar/desmarcar un alumno o escribir en el
+// buscador NO recalcula los cientos de QR de las demás tarjetas (que es lo
+// que causaba el lag). Los callbacks que recibe deben ser estables (useCallback).
+const CarnetCard = memo(function CarnetCard({ e, marcado, onToggle, onImprimir, onDescargar }) {
+  const esManana = e.turno === 'MANANA';
+  return (
+    <div
+      className={`relative bg-surface-container-lowest rounded-xl border shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow break-inside-avoid ${
+        marcado ? 'border-primary ring-2 ring-primary' : 'border-[#c5c5d3]'
+      }`}
+    >
+      {/* Casilla para marcar este alumno y reimprimir en grupo */}
+      <button
+        onClick={() => onToggle(e.id)}
+        title={marcado ? 'Quitar de la reimpresión' : 'Marcar para reimprimir en grupo'}
+        aria-pressed={marcado}
+        className={`absolute top-4 left-3 z-10 w-5 h-5 rounded flex items-center justify-center border transition-colors no-print ${
+          marcado
+            ? 'bg-primary border-primary text-on-primary'
+            : 'bg-surface/90 border-on-surface-variant/60 text-transparent hover:border-primary'
+        }`}
+      >
+        <Icon name="check" className="text-[14px]" />
+      </button>
+      <div className={`h-2 w-full ${esManana ? 'bg-amber-500' : 'bg-indigo-500'}`} />
+      <div
+        onClick={() => onToggle(e.id)}
+        title="Clic para marcar/desmarcar este carnet"
+        className="p-5 flex flex-col items-center flex-1 cursor-pointer"
+      >
+        <div className="w-32 h-32 flex items-center justify-center border border-[#c5c5d3] p-2 rounded-lg bg-white">
+          <QRCodeSVG id={`qr-${e.id}`} value={e.dni} size={112} level="M" />
+        </div>
+        <p className="mt-3 font-title-md text-title-md text-on-surface text-center">
+          {e.apellidos}, {e.nombres}
+        </p>
+        <p className="text-xs text-on-surface-variant mt-1">
+          {gradoCorto(e.grado)} "{e.seccion}" · {String(e.dni).length > 10 ? 'Código' : 'DNI'} {e.dni}
+        </p>
+        <span
+          className={`mt-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+            esManana ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'
+          }`}
+        >
+          {esManana ? 'Mañana' : 'Tarde'}
+        </span>
+      </div>
+      <div className="bg-surface-container-low px-4 py-3 border-t border-outline-variant flex justify-between items-center no-print">
+        <span className="font-label-md text-label-md text-primary cursor-default">{e.dni}</span>
+        <div className="flex items-center gap-3">
+          <button onClick={() => onImprimir(e)} title="Imprimir solo este carnet (PDF)">
+            <Icon name="print" className="text-outline hover:text-primary cursor-pointer" />
+          </button>
+          <button onClick={() => onDescargar(e)} title="Descargar carnet (PNG)">
+            <Icon name="download" className="text-outline hover:text-primary cursor-pointer" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 export default function CarnetsQR() {
   const { toast } = useUI();
@@ -122,6 +185,12 @@ export default function CarnetsQR() {
       .sort(compararEstudiantes);
   }, [estudiantes, turno, gradosSel, busqueda]);
 
+  // Ref siempre actualizado con lo filtrado, para que imprimirCarnets pueda
+  // usarlo por defecto SIN depender de `filtrados` (así el callback es estable
+  // y no rompe la memoización de las tarjetas al buscar/filtrar).
+  const filtradosRef = useRef(filtrados);
+  filtradosRef.current = filtrados;
+
   // Cierra el menú de secciones al hacer clic fuera de él.
   useEffect(() => {
     if (!menuAbierto) return;
@@ -162,14 +231,14 @@ export default function CarnetsQR() {
     [estudiantes, seleccionados]
   );
 
-  function alternarSeleccion(id) {
+  const alternarSeleccion = useCallback((id) => {
     setSeleccionados((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
+  }, []);
 
   function limpiarSeleccion() {
     setSeleccionados(new Set());
@@ -193,7 +262,8 @@ export default function CarnetsQR() {
   // Imprime una lista de carnets. Por defecto imprime lo filtrado, pero se le
   // puede pasar un solo alumno (p. ej. desde el botón "imprimir" de su tarjeta)
   // para reimprimir un carnet perdido o dañado.
-  function imprimirCarnets(lista = filtrados) {
+  const imprimirCarnets = useCallback((listaArg) => {
+    const lista = listaArg ?? filtradosRef.current;
     if (lista.length === 0) return;
     toast(`Generando PDF de ${lista.length} carnet(s)…`, 'info');
 
@@ -294,12 +364,15 @@ export default function CarnetsQR() {
       iframe.contentWindow.print();
       setTimeout(() => document.body.removeChild(iframe), 1000);
     }, 250);
-  }
+  }, [toast]);
+
+  // Imprime un solo carnet (estable para no romper la memoización de la tarjeta).
+  const imprimirUno = useCallback((e) => imprimirCarnets([e]), [imprimirCarnets]);
 
   // Descarga el CARNET COMPLETO como PNG (no solo el QR): franja de color,
   // QR, nombre, grado/sección, DNI/código y etiqueta de turno, igual que en
   // la vista y el PDF. Se dibuja todo en un canvas de alta resolución.
-  function descargarCarnet(e) {
+  const descargarCarnet = useCallback((e) => {
     const svg = document.getElementById(`qr-${e.id}`);
     if (!svg) {
       toast('No se pudo generar el carnet', 'error');
@@ -398,7 +471,7 @@ export default function CarnetsQR() {
     };
 
     qrImg.src = url;
-  }
+  }, [toast]);
 
   return (
     <>
@@ -576,65 +649,16 @@ export default function CarnetsQR() {
 
         {/* Cards Grid (Print Area) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6" id="print-area">
-          {filtrados.map((e) => {
-            const marcado = seleccionados.has(e.id);
-            return (
-            <div
+          {filtrados.map((e) => (
+            <CarnetCard
               key={e.id}
-              className={`relative bg-surface-container-lowest rounded-xl border shadow-sm overflow-hidden flex flex-col group hover:shadow-md transition-shadow break-inside-avoid ${
-                marcado ? 'border-primary ring-2 ring-primary' : 'border-[#c5c5d3]'
-              }`}
-            >
-              {/* Casilla para marcar este alumno y reimprimir en grupo */}
-              <button
-                onClick={() => alternarSeleccion(e.id)}
-                title={marcado ? 'Quitar de la reimpresión' : 'Marcar para reimprimir en grupo'}
-                aria-pressed={marcado}
-                className={`absolute top-4 left-3 z-10 w-5 h-5 rounded flex items-center justify-center border transition-colors no-print ${
-                  marcado
-                    ? 'bg-primary border-primary text-on-primary'
-                    : 'bg-surface/90 border-on-surface-variant/60 text-transparent hover:border-primary'
-                }`}
-              >
-                <Icon name="check" className="text-[14px]" />
-              </button>
-              <div className={`h-2 w-full ${e.turno === 'MANANA' ? 'bg-amber-500' : 'bg-indigo-500'}`} />
-              <div
-                onClick={() => alternarSeleccion(e.id)}
-                title="Clic para marcar/desmarcar este carnet"
-                className="p-5 flex flex-col items-center flex-1 cursor-pointer"
-              >
-                <div className="w-32 h-32 flex items-center justify-center border border-[#c5c5d3] p-2 rounded-lg bg-white">
-                  <QRCodeSVG id={`qr-${e.id}`} value={e.dni} size={112} level="M" />
-                </div>
-                <p className="mt-3 font-title-md text-title-md text-on-surface text-center">
-                  {e.apellidos}, {e.nombres}
-                </p>
-                <p className="text-xs text-on-surface-variant mt-1">
-                  {gradoCorto(e.grado)} "{e.seccion}" · {String(e.dni).length > 10 ? 'Código' : 'DNI'} {e.dni}
-                </p>
-                <span
-                  className={`mt-2 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                    e.turno === 'MANANA' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'
-                  }`}
-                >
-                  {e.turno === 'MANANA' ? 'Mañana' : 'Tarde'}
-                </span>
-              </div>
-              <div className="bg-surface-container-low px-4 py-3 border-t border-outline-variant flex justify-between items-center no-print">
-                <span className="font-label-md text-label-md text-primary cursor-default">{e.dni}</span>
-                <div className="flex items-center gap-3">
-                  <button onClick={() => imprimirCarnets([e])} title="Imprimir solo este carnet (PDF)">
-                    <Icon name="print" className="text-outline hover:text-primary cursor-pointer" />
-                  </button>
-                  <button onClick={() => descargarCarnet(e)} title="Descargar carnet (PNG)">
-                    <Icon name="download" className="text-outline hover:text-primary cursor-pointer" />
-                  </button>
-                </div>
-              </div>
-            </div>
-            );
-          })}
+              e={e}
+              marcado={seleccionados.has(e.id)}
+              onToggle={alternarSeleccion}
+              onImprimir={imprimirUno}
+              onDescargar={descargarCarnet}
+            />
+          ))}
         </div>
 
         {!cargando && filtrados.length === 0 && (

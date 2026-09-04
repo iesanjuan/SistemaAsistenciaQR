@@ -197,8 +197,19 @@ export default function ImportarExcel() {
           .map((fila) => {
             if (!Array.isArray(fila)) return null;
             const dni = valor(fila, 'DNI').replace(/\s+/g, '');
-            const nombres = valor(fila, 'NOMBRES');
-            const apellidos = valor(fila, 'APELLIDOS');
+            let nombres = valor(fila, 'NOMBRES');
+            let apellidos = valor(fila, 'APELLIDOS');
+            // Algunos Excel traen apellidos y nombre juntos en una sola celda,
+            // como "CHONTA AYALA, Anyeli Mayumi". Si la celda de apellidos tiene
+            // coma, se toma la parte antes de la coma como apellidos (y la de
+            // despues como nombres si no hubiera una columna de nombres). Asi el
+            // nombre no se repite.
+            if (apellidos.includes(',')) {
+              const partes = apellidos.split(',');
+              apellidos = partes[0].trim();
+              const nomDesdeApellidos = partes.slice(1).join(',').trim();
+              if (!nombres) nombres = nomDesdeApellidos;
+            }
             // Grado y sección: de la columna combinada ("1°A") si existe, si no
             // de las columnas separadas.
             let grado, seccion;
@@ -406,7 +417,7 @@ export default function ImportarExcel() {
         <div className="flex gap-1 bg-surface-container-low rounded-lg p-1 border border-outline-variant w-full md:w-fit">
           {[
             { key: 'importar', label: 'Importar / Sincronizar', icon: 'upload_file' },
-            { key: 'editar', label: 'Modificar alumno', icon: 'edit' },
+            { key: 'editar', label: 'Editar / Agregar alumno', icon: 'edit' },
           ].map((t) => (
             <button
               key={t.key}
